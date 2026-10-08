@@ -49,11 +49,13 @@ export async function createGroup(
 ) {
   const name = values.name.trim()
   const description = values.description.trim() || null
-  const createdAfter = new Date().toISOString()
 
   // The group-creation trigger adds the creator to group_members. A SELECT
   // chained to this INSERT can run its RLS check before that trigger's row is
   // visible to the stable membership helper, so insert first and read after.
+  // The database generates id and only grants INSERT on name, description and
+  // created_by. Do not compare created_at with the browser clock: clock skew
+  // can otherwise hide the successfully inserted row from this follow-up read.
   const { error: insertError } = await client
     .from('groups')
     .insert({
@@ -63,16 +65,15 @@ export async function createGroup(
     })
   if (insertError) throw insertError
 
-  let query = client
+  const query = client
     .from('groups')
     .select('id, name, description, created_by, created_at')
     .eq('created_by', userId)
     .eq('name', name)
-    .gte('created_at', createdAfter)
     .order('created_at', { ascending: false })
     .limit(1)
-  query = description === null ? query.is('description', null) : query.eq('description', description)
-  const { data, error } = await query.maybeSingle()
+  const matchingQuery = description === null ? query.is('description', null) : query.eq('description', description)
+  const { data, error } = await matchingQuery.maybeSingle()
 
   if (error) throw error
   if (!data) throw new Error('O grupo foi criado, mas não foi possível carregá-lo.')

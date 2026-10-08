@@ -1,0 +1,8 @@
+# Local Supabase CLI project identifier.
+project_id = "splituai"
+
+# Existing hosted project (not the target because it is in Virginia).
+# Create a new Free project in sa-east-1 (São Paulo), then link its reference
+# with the Supabase CLI. Passwords and API keys are intentionally absent.
+# Existing project ref: ipbnqofmggytdkgmadtc
+# Existing region: us-east-1 (East US / North Virginia)

@@ -1,8 +1,17 @@
 # Local Supabase CLI project identifier.
 project_id = "splituai"
 
-# Existing hosted project (not the target because it is in Virginia).
-# Create a new Free project in sa-east-1 (São Paulo), then link its reference
-# with the Supabase CLI. Passwords and API keys are intentionally absent.
-# Existing project ref: ipbnqofmggytdkgmadtc
-# Existing region: us-east-1 (East US / North Virginia)
+# Hosted target: yzxeyqutmvjmrglmpcbb (Free, São Paulo / sa-east-1).
+# The separate Virginia project ipbnqofmggytdkgmadtc is intentionally untouched.
+# Passwords and API keys are intentionally absent from this file.
+
+[auth]
+enabled = true
+site_url = "https://jotachina.github.io/SplitUai/"
+enable_signup = false
+enable_anonymous_sign_ins = false
+
+[auth.email]
+# Keep the email provider available for existing invited users to sign in.
+# The global auth.enable_signup setting above still blocks public signups.
+enable_signup = true

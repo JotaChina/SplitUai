@@ -90,8 +90,8 @@ Guardar dinheiro como inteiro em centavos, não como ponto flutuante. A soma das
 - [x] Confirmar frontend com React + TypeScript + Vite.
 - [x] Definir fluxo para adicionar amigos: entrada controlada por convite do administrador; não abrir cadastro público.
 - [x] Identificar o projeto Supabase existente (`ipbnqofmggytdkgmadtc`), saudável em `us-east-1` (East US / North Virginia).
-- [ ] Criar um novo projeto Supabase no plano Free e região São Paulo (`sa-east-1`), confirmando cota e total US$ 0; manter o projeto existente da Virginia sem alterações.
-- [ ] Conectar/configurar o repositório GitHub e habilitar publicação por GitHub Actions para Pages.
+- [x] Confirmar o novo projeto Supabase Free em São Paulo (`sa-east-1`); manter o projeto existente da Virginia sem alterações.
+- [x] Conectar o repositório GitHub e habilitar publicação por GitHub Actions para Pages.
 
 **Pronto quando:** as escolhas estão anotadas, o repositório tem a aplicação inicial e os serviços externos foram criados sem segredos no código.
 
@@ -100,28 +100,65 @@ Guardar dinheiro como inteiro em centavos, não como ponto flutuante. A soma das
 - [x] Criar aplicação frontend com configuração para caminho de projeto do GitHub Pages.
 - [x] Montar navegação e telas iniciais: entrar, grupos, detalhe do grupo e formulário de despesa (dados demonstrativos locais).
 - [x] Criar identidade visual simples, responsiva e acessível como primeira versão.
-- [ ] Publicar uma primeira versão estática no Pages.
+- [x] Publicar uma primeira versão estática no Pages.
 
 **Pronto quando:** a URL do Pages abre a aplicação e a navegação básica funciona em desktop e celular.
 
 ### Etapa 2 — Banco e autenticação
 
-- [ ] Criar migrações SQL para tabelas, restrições, índices e relações.
-- [ ] Configurar autenticação por e-mail/senha (ou escolher outro método adequado ao grupo).
-- [ ] Implementar entrada, saída e estado de sessão.
-- [ ] Configurar políticas RLS e privilégios mínimos para cada tabela.
-- [ ] Criar contas de teste e verificar que usuário fora do grupo não acessa seus dados.
+- [x] Preparar migração SQL local para tabelas, restrições, índices, relações e políticas RLS explícitas.
+- [x] Definir configuração local de Auth por e-mail, sem cadastro público nem sessões anônimas.
+- [x] Implementar entrada, saída, restauração de sessão e definição de senha após convite; sem cadastro público.
+- [x] Aplicar migração e revisar as políticas RLS no projeto confirmado de São Paulo.
+- [x] Verificar isolamento entre grupos e usuário sem associação com dados sintéticos em transação revertida.
 
 **Pronto quando:** usuários conseguem entrar e as regras de acesso são aplicadas pelo banco, inclusive em chamadas diretas à API.
 
 ### Etapa 3 — Grupos e participantes
 
-- [ ] Criar grupo.
-- [ ] Listar grupos dos quais a pessoa participa.
-- [ ] Adicionar participantes de forma controlada.
-- [ ] Mostrar participantes e permissões no detalhe do grupo.
+- [ ] Antes de qualquer futuro deploy/push, a comparação foi feita: `20261007000100` aparece local/remoto; `20261007000200` aparece local, mas ausente no histórico remoto. Uma consulta somente de leitura confirmou que a definição remota de `handle_invited_auth_user()` corresponde ao SQL local 002. Ainda falta autorizar e executar `supabase migration repair --status applied 20261007000200 --linked` (altera apenas o histórico de migrations) ou decidir outro plano. Não executar `db push` às cegas.
+- [x] Implementar a listagem e criação de grupos usando a sessão autenticada e a chave publicável, mantendo despesas demonstrativas. A política existente limita leitura a membros e a criação exige `created_by = auth.uid()`; o trigger adiciona o criador como admin.
+- [x] Mostrar participantes e papéis no detalhe. A leitura de `group_members` e dos perfis dos colegas é permitida somente a membros do mesmo grupo; o cliente não escreve diretamente em `group_members`.
+- [x] Implementar a criação de convite pendente por admin; o envio do convite Auth continua sendo feito pelo painel Supabase nesta primeira versão, sem chave privilegiada no navegador. O trigger associa a conta ao grupo quando o usuário convidado é criado no Auth. O app informa o procedimento e mostra os convites e estados.
+- [x] Compilar a aplicação localmente com Node 24.19.0; corrigir o estado React `reload` não utilizado identificado pelo TypeScript.
+- [x] Cobrir permissões com testes positivos e negativos no Supabase local usando sessões autenticadas distintas. A chave privilegiada local foi usada só para provisionar/remover contas de teste; as asserções usaram a chave pública e sessões dos usuários.
 
-**Pronto quando:** dois usuários de teste veem o mesmo grupo compartilhado e um terceiro usuário não consegue acessá-lo.
+**Pronto quando:** criação e listagem persistem; o criador é admin; participantes autorizados veem o mesmo grupo e seus participantes; convite válido associa somente a conta convidada; usuários de fora não leem nem alteram o grupo; tentativas diretas de escrita de associação são recusadas. Build e 17 cenários locais passaram. Falta validar o envio pelo painel Auth e cobrir convites expirados/revogados e usuários Auth preexistentes antes de considerar o fluxo de convite completo. Despesas continuam demonstrativas até a Etapa 4.
+
+#### Revisão das políticas e riscos para a Etapa 3 (2026-10-07)
+
+Fonte: `supabase/migrations/20261007000100_etapa_2_schema_e_rls.sql` e a redefinição do trigger em `supabase/migrations/20261007000200_fix_invited_auth_user_trigger.sql`. A revisão inicial é do SQL versionado local. Posteriormente foram consultados somente o histórico de migrations e a definição remota do trigger; nenhuma alteração foi feita no banco.
+
+| Área | Acesso atual | Lacunas e riscos a tratar |
+|---|---|---|
+| `groups` | `groups_select_members` permite SELECT a membros; `groups_insert_self_as_creator` permite INSERT se `created_by = auth.uid()`; `groups_update_admins` permite UPDATE a admins. Grants só liberam INSERT de `name`, `description`, `created_by` e UPDATE de `name`, `description`. Trigger `groups_add_creator_as_admin` cria o admin. DELETE negado por `groups_delete_denied`. | O frontend já lista/cria grupos e edita nome/descrição pelo cliente autenticado. Os testes locais confirmaram criação/admin inicial, recusa de `created_by` forjado, edição por admin e recusa de membro comum. Não há DELETE intencional. |
+| `group_members` | `group_members_select_group_peers` dá SELECT de membros do mesmo grupo; INSERT/UPDATE/DELETE são negados (`*_denied`). Associação é criada pelo trigger do grupo e pelo trigger de Auth para convite válido. | Os testes locais confirmaram leitura entre membros, isolamento de outros usuários e recusa de INSERT/UPDATE/DELETE diretos, inclusive tentativa de autopromoção. Não há API de remoção/troca de papel. O convite associa a conta quando o registro Auth é criado, antes do aceite do link; o fluxo de envio por e-mail ainda depende do painel. |
+| `group_invitations` | SELECT apenas para admins (`group_invitations_select_admins`); INSERT para admin do grupo, com `invited_by = auth.uid()`, `status = 'pending'` e expiração futura (`group_invitations_insert_admins`). UPDATE/DELETE negados. Grants liberam INSERT das colunas de convite. | Os testes locais confirmaram que admin cria/consulta e membro comum não cria nem lê convites. Inserir a linha não envia e-mail; envio, expiração/revogação e usuário Auth preexistente ainda precisam de validação/processo pelo painel ou operação controlada. O prazo máximo não é limitado pela tabela. Nunca automatizar com chave Admin no frontend. |
+| `profiles` | SELECT do próprio perfil e dos colegas de grupo via `profiles_select_self_or_group_peers`; UPDATE próprio limitado pelo grant à coluna `display_name`; INSERT/DELETE diretos negados. Perfil inicial é criado pelo trigger de Auth. | Selecionar perfil expõe aos colegas o ID, nome e timestamps disponíveis; não expõe e-mail nesta tabela. Confirmar na UI que só se mostra o necessário. |
+| `expenses` e `expense_shares` | SELECT a membros do grupo (`expenses_select_group_members`, `expense_shares_select_group_members`); INSERT/UPDATE/DELETE diretos negados por políticas e grants. A função `create_expense_with_shares` permite criação atômica a membro e valida pagador/participantes no grupo, valores e soma das parcelas. | Nenhuma conexão de despesas nesta etapa. A função não oferece edição/exclusão; isso fica para a Etapa 4. Testar a RPC com participante de outro grupo e soma inválida antes de usá-la. |
+| `bootstrap_invites` | RLS habilitada e políticas `*_denied`; sem grants para `anon`/`authenticated`. | Operação exclusiva do proprietário via SQL Editor; não expor no app. |
+
+As funções auxiliares `is_current_user_group_member`, `is_current_user_group_admin` e `can_current_user_view_profile` são `SECURITY DEFINER`, fixam `search_path` vazio e têm execução concedida a `authenticated` para uso nas políticas. Como também podem ser chamadas diretamente com UUIDs, revisar se a resposta booleana permite sondagem de associação/perfil além do esperado; restringir ou redesenhar sem quebrar as policies antes de ampliar o uso. A função de criação de despesa também é `SECURITY DEFINER`, valida a associação e só tem execução concedida a `authenticated`.
+
+#### Sequência proposta e critérios de autorização
+
+1. **Preparação e revisão local:** confirmar schema/policies acima; preparar casos com usuários A e B no grupo G1, usuário C somente em G2 e usuário D sem grupo. Revisar a sincronização de histórico CLI antes de qualquer futuro `db push`, comparando migrations e estado remoto e confirmando o alvo São Paulo. A aplicação corretiva foi feita no SQL Editor e não deve ser reaplicada às cegas.
+2. **Grupos:** implementar chamadas autenticadas para listar grupos e criar grupo, com estados de carregamento/erro/vazio. Validar que A cria G1 e torna-se admin; membros de G1 leem G1; C e D não recebem G1; C não renomeia G1; A consegue renomear. Tentativas de criar grupo com `created_by` de outra conta devem falhar.
+3. **Participantes:** consultar `group_members` e os perfis permitidos para renderizar nome e papel. Confirmar que A/B veem a composição de G1; C/D não leem membros/perfis de G1; qualquer INSERT/UPDATE/DELETE direto de `group_members` pelo cliente falha, inclusive tentativa de promover a si mesmo a admin.
+4. **Convite controlado:** admin cria convite pendente para e-mail normalizado do grupo; usuário comum e pessoa externa não criam convite nem leem a lista de convites. Operador autorizado envia pelo painel Auth; testar convite válido, expirado, revogado/ausente e e-mail diferente. Confirmar que apenas a conta com o e-mail convidado ganha associação ao grupo esperado. Até existir serviço confiável para envio, manter a operação de painel documentada e não simular envio no frontend.
+5. **Validação de isolamento:** fazer cenários positivos e negativos em ambiente local de Supabase quando disponível; antes de usar dados reais ou publicar, repetir com contas de teste no alvo remoto em transações/ações reversíveis e revisar resultado. Usar sessões autenticadas distintas e verificar a API como cada usuário, sem credenciais privilegiadas para a prova. Despesas permanecem demo durante toda a Etapa 3.
+
+**Localmente:** build e 17 verificações com Supabase local concluídos. Contas e grupos foram provisionados em banco local e removidos ao final; serviço privilegiado local só preparou/limpou fixtures, enquanto as verificações usaram sessões de usuários pela chave pública. **Painel/projeto remoto:** `supabase migration list --linked` mostrou 001 sincronizada e 002 ausente do histórico remoto; leitura de `pg_get_functiondef` confirmou que a função remota coincide com 002. Não executamos `migration repair`, push ou deploy. O teste de entrega Auth ainda exige enviar convite manual pelo painel; não foi feito. Não alterar o projeto `ipbnqofmggytdkgmadtc` da Virginia, não publicar/fazer push/deploy nem conectar despesas reais sem autorização, e nunca incluir `secret`/`service_role` no frontend ou Git.
+
+#### Validação de implementação (2026-10-07)
+
+- `npm run build` com Node global 20.11.1 não pôde concluir: essa versão está abaixo do requisito do Vite e o sandbox bloqueou o subprocesso do esbuild. Com Node empacotado 24.19.0, `tsc -b` e `vite build` passaram após a correção descrita abaixo.
+- O erro TypeScript identificado foi o estado `reload` declarado em `Group` e não usado. Foi removido. Os testes também descobriram que `createGroup` encadeava `.select()` ao INSERT; a policy de leitura falhava no mesmo request enquanto o trigger criava a associação. O cliente agora insere primeiro e lê o grupo em request separado; o teste chamou a função real do app.
+- Com Docker ativo, o Supabase local aplicou as duas migrations. Dezessete verificações passaram com usuários Auth distintos e chamadas autenticadas por chave pública: cadastro público bloqueado; criação/admin inicial; convite normalizado e associação de membro pelo trigger; leitura dos membros e dos convites por papel; isolamento entre grupos e de usuário sem associação; rejeição de `created_by` forjado; edição por admin/recusa de membro; recusa de INSERT/UPDATE/DELETE diretos em `group_members`; recusa de convite por membro comum. O service role local serviu somente para provisionamento/limpeza das contas, nunca como sessão usada nas asserções.
+- O trigger foi exercitado por criação local de conta Auth. O envio de e-mail no painel, convites expirados/revogados e usuário Auth preexistente ainda não foram testados.
+- `.env.local` não foi usado para dados de teste. A única consulta remota nesta continuação foi a leitura do histórico de migrations e da definição atual do trigger; nenhuma alteração remota, push ou deploy foi executada.
+- As funções auxiliares `is_current_user_group_member`, `is_current_user_group_admin` e `can_current_user_view_profile` continuam executáveis diretamente por `authenticated`, além de seu uso pelas policies. Isso pode permitir sondagem booleana para UUIDs conhecidos; avaliar isolamento dessas funções em schema não exposto pela API antes de ampliar a exposição.
+- A configuração local inicialmente desabilitava o provedor de e-mail junto com o cadastro. Ela foi ajustada para permitir login por e-mail de contas existentes, mantendo `auth.enable_signup = false` global; um teste confirmou que o cadastro público segue bloqueado. Isso afeta apenas a configuração local.
 
 ### Etapa 4 — Despesas e divisão
 
@@ -153,25 +190,29 @@ Guardar dinheiro como inteiro em centavos, não como ponto flutuante. A soma das
 
 ## Andamento atual
 
-- **Status:** Etapa 0 parcialmente concluída: projeto Supabase existente identificado, novo projeto São Paulo condicionado à cota Free; Etapa 1 implementada localmente, aguardando repositório remoto e publicação.
-- **Concluído nesta continuação:** região alvo São Paulo aceita pelo usuário, desde que no plano Free; registrados limites de cota e pausa por inatividade; identificada a restrição GitHub Pages para repositório privado; passos de criação e push documentados.
-- **Limites atuais:** telas demonstrativas, sem login/persistência. O Git local está em `main`, ainda sem commits, remoto ou identidade de autoria configurados. `JotaChina/SplitUai` não existe. O Brave não está disponível para automação nesta sessão. Projeto alvo em São Paulo ainda não foi criado nem vinculado à CLI.
-- **Decisões registradas:** React + TypeScript + Vite; português/BRL; entrada por convite controlado; GitHub Pages via Actions; criar o projeto alvo Supabase em São Paulo (`sa-east-1`) somente no Free/US$ 0; manter o projeto Virginia (`ipbnqofmggytdkgmadtc`, `us-east-1`) sem alterações.
-- **Próxima etapa recomendada:** o usuário cria o novo projeto Supabase com organização Free, região São Paulo e total US$ 0; o usuário cria `JotaChina/SplitUai` no GitHub com visibilidade compatível com o plano e executa os comandos de Git do README. Depois, vincular a CLI, habilitar Pages e fazer o primeiro deploy.
+- **Status:** Etapas 0, 1 e 2 concluídas nos escopos registrados. Etapa 3 implementada e build aprovado; 17 cenários de isolamento/autorização passaram no Supabase local com usuários distintos. Falta validar o envio de e-mail pelo painel e cobrir convites expirados/revogados e usuários Auth preexistentes. Despesas e saldos seguem demonstrativos.
+- **Projeto alvo (2026-10-07):** `yzxeyqutmvjmrglmpcbb`, SplitUai, saudável, organização Free, São Paulo (`sa-east-1`, `t3.nano`), confirmado pelo painel e pela vinculação da CLI. O projeto Virginia `ipbnqofmggytdkgmadtc` permanece intocado. O painel mostra GitHub conectado a `JotaChina/SplitUai`, produção em `main` e deploy automático de banco habilitado; não houve push nem publicação nesta continuação.
+- **Banco e Auth:** aplicada `supabase/migrations/20261007000100_etapa_2_schema_e_rls.sql`; lint remoto sem erros. Todas as sete tabelas públicas estão com RLS habilitada e políticas explícitas. Teste transacional com dois membros de grupos distintos e um usuário externo retornou apenas grupos/dados autorizados; as linhas sintéticas foram revertidas e sua ausência foi conferida. Auth remoto atualizado para desabilitar cadastro público; URL de retorno aponta para o GitHub Pages. CLI Supabase 2.120.0 vinculada somente ao projeto alvo.
+- **Frontend:** implementados login por e-mail/senha, estado/restauração de sessão, logout e formulário de senha após convite. O cliente só inicializa com URL e chave publicável fornecidas por ambiente; nenhum segredo foi adicionado. Grupos e participantes consultam/escrevem no Supabase usando sessão e chave publicável; despesas seguem demonstrativas. O fluxo de criação de grupo foi corrigido para separar INSERT e SELECT e passou teste local. Admin cria registro de convite e deve enviar Auth pelo painel. Contas Auth preexistentes não são associadas por este trigger. Build Vite e 17 verificações locais aprovados; envio de e-mail no painel ainda pendente.
+- **Configuração local:** `.env.local` já está preenchido para o projeto `yzxeyqutmvjmrglmpcbb`; conferidos somente correspondência da URL e presença/formato público da chave, sem exibir seu valor. A tela de login inicializou em `http://127.0.0.1:5173/SplitUai/` com Node 24 do ambiente. O Node global 20.11.1 não inicia o Vite 7 atual. `.gitignore` ignora `.env.local`. Não enviar chaves pelo chat nem usar chave `secret`/`service_role` no frontend.
+- **Uso e cobrança (2026-10-07):** o painel confirmou `JotaChina's Org` com um único projeto e plano Free. Com filtro **All projects**, a organização não excedeu a cota no ciclo exibido (08/10/2026–08/11/2026); banco em 0,027/0,5 GB (5%), os outros indicadores visíveis em zero. A página de cobrança confirmou **spend cap habilitado** e nenhuma fatura listada. O painel informa que excedentes não geram cobrança com esse controle ligado, mas podem deixar projetos indisponíveis ou somente leitura. Revalidar limites antes de expandir uso.
+- **Convite inicial:** o redirect `http://localhost:5173/**` foi adicionado e verificado. O `bootstrap_invite` foi inserido (expira em sete dias). O primeiro envio falhou; logs registraram `SplitUai accounts are invitation-only`, emitido pela checagem de `invited_at` da função do trigger antes da validação do convite. A função foi corrigida pela migração `20261007000200_fix_invited_auth_user_trigger.sql`, aplicada pelo SQL Editor somente no projeto alvo; ela continua exigindo convite não expirado e não consumido ou convite de grupo pendente. O segundo envio teve sucesso: o Auth criou o usuário não confirmado e o painel mostrou `Sent invite email`. Nesta continuação, o Site URL foi alterado temporariamente para `http://localhost:5173/SplitUai/`, o convite foi reenviado pelo painel e o Site URL de GitHub Pages foi restaurado e conferido. Não houve push nem deploy. A aplicação direta pelo SQL Editor ainda precisa ser sincronizada com o histórico de migrações da CLI antes de um futuro `db push`.
+- **Próximos passos:** se autorizado, reconciliar o histórico da 002 com `supabase migration repair --status applied 20261007000200 --linked`, então fazer push/deploy; o Supabase tem deploy automático de banco ligado na `main`, por isso esse passo vem antes do push. Teste do convite pelo painel e revisão das funções auxiliares expostas também permanecem pendentes. Nesta continuação houve apenas consultas remotas read-only, sem alteração, push ou deploy. Nunca versionar token CLI, senha do banco, chave `secret` ou `service_role`; nunca alterar/apontar o app ao projeto Virginia.
 
 ## Registro de decisões
 
 | Data | Decisão | Estado |
 |---|---|---|
 | 2026-10-07 | Hospedar frontend no GitHub Pages e usar backend gerenciado para autenticação e dados compartilhados. | Confirmado como direção do projeto |
-| 2026-10-07 | Supabase é o backend escolhido para autenticação e dados relacionais. | Confirmado; projeto e região ainda precisam ser configurados |
-| 2026-10-07 | Criar um novo projeto Free em São Paulo (`sa-east-1`) por proximidade dos usuários, desde que a tela confirme custo US$ 0 e haja cota. | Confirmado pelo usuário; criação ainda pendente |
+| 2026-10-07 | Supabase é o backend escolhido para autenticação e dados relacionais. | Confirmado e configurado somente no projeto de São Paulo |
+| 2026-10-07 | Usar o projeto novo `yzxeyqutmvjmrglmpcbb`, Free em São Paulo (`sa-east-1`). | Confirmado pelo painel e CLI; uso atual abaixo das cotas exibidas e spend cap habilitado |
 | 2026-10-07 | Registrar o projeto Supabase existente `ipbnqofmggytdkgmadtc`, em `us-east-1` (East US / North Virginia). | Projeto saudável conforme captura do usuário; ref e URL pública registradas, sem segredos |
-| 2026-10-07 | Manter o projeto existente da Virginia sem alterações e não apontar o SplitUai para ele. | Confirmado como caminho enquanto um projeto novo em São Paulo é criado |
-| 2026-10-07 | O deploy Pages usará GitHub Actions com `configure-pages`, `npm ci` e artefato `dist`. | Workflow local pronto; remoto GitHub e primeira publicação pendentes |
+| 2026-10-07 | Manter o projeto existente da Virginia sem alterações e não apontar o SplitUai para ele. | Em vigor; CLI e migração apontam somente para São Paulo |
+| 2026-10-07 | O deploy Pages usará GitHub Actions com `configure-pages`, `npm ci` e artefato `dist`. | Publicado e funcionando em `https://jotachina.github.io/SplitUai/` |
 | 2026-10-07 | O produto é para uso pessoal e amigos próximos, sem pagamentos integrados. | Confirmado |
 | 2026-10-07 | Usar React + TypeScript + Vite, idioma português e valores em BRL. | Confirmado; scaffold criado |
-| 2026-10-07 | Manter a entrada controlada por convite do administrador, sem cadastro público. | Confirmado; interface ainda demonstrativa |
+| 2026-10-07 | Manter a entrada controlada por convite do administrador, sem cadastro público. | Auth local/remoto sem signup público; fluxo de autenticação implementado |
+| 2026-10-07 | Não conectar o frontend a dados reais até revisar RLS e confirmar isolamento entre grupos. | RLS aplicada e teste transacional inicial aprovado; dados reais ainda não conectados |
 
 ## Notas operacionais
 

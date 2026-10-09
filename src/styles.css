@@ -40,3 +40,26 @@
 @media(max-width:700px){.heading-actions{align-items:flex-start}.invite-form{align-items:stretch;flex-direction:column}.invite-form .button{align-self:flex-end}.detail-hero .group-edit-form{max-width:100%}}
 @media(max-width:700px){.topbar-account{gap:5px}.topbar-account>span{max-width:112px}.auth-wrap{padding-top:24px}.auth-brand{display:flex;padding-bottom:32px}}
 @media(max-width:390px){.summary-row{grid-template-columns:1fr}.summary-card{min-height:110px}.summary-green{display:none}.page-heading{display:block}.page-heading .button{margin-top:15px}.page-heading p{max-width:none}}
+:root{}
+.expense-open{border:0;background:transparent;color:inherit;padding:0;text-align:left;cursor:pointer}
+.expense-open:hover strong{color:#638c2b}
+.expense-edit,.expense-delete{border:0;background:#f2f4ed;border-radius:6px;color:#66705d;font-size:9px;padding:6px 8px}
+.expense-delete{font-size:15px;line-height:12px;padding:4px 8px;color:#a45e4e}
+.empty-expenses{padding:28px;text-align:center;color:#666e5d}
+.empty-expenses strong{font:700 12px Manrope,sans-serif}
+.empty-expenses p{font-size:10px;color:#92968d}
+.form-wrap textarea{width:100%;border:1px solid #e1e4db;border-radius:8px;background:#fff;padding:10px 12px;color:#2d3329;font-size:11px;resize:vertical}
+.participant-picker{border:1px solid #e1e4db;border-radius:8px;background:#fff;padding:12px;display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+.participant-picker legend{font-size:10px;font-weight:700;color:#656d5e;padding:0 5px}
+.form-wrap .participant-picker label{display:flex;align-items:center;gap:8px;font-size:10px;font-weight:500}
+.form-wrap .participant-picker input{width:16px;height:16px;margin:0;accent-color:#638c2b}
+@media(max-width:700px){.expense-row{gap:7px;padding:10px}.expense-edit{padding:6px}.expense-amount{font-size:10px}.participant-picker{grid-template-columns:1fr}}
+.balance-list, .settlement-panel { background: var(--paper, #fff); border: 1px solid var(--line, #e8e5df); border-radius: 16px; padding: 8px 20px; }
+.balance-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 13px 0; border-bottom: 1px solid var(--line, #e8e5df); }
+.balance-row:last-child { border-bottom: 0; }
+.balance-positive { color: #26745e; }
+.balance-negative { color: #b4513e; }
+.settlement-panel { margin-top: 14px; padding: 18px 20px; }
+.settlement-panel h3 { margin: 0 0 8px; font-size: 1rem; }
+.settlement-panel p, .settlement-panel small { color: var(--muted, #777); }
+.settlement-panel > small { display: block; margin-top: 12px; }

@@ -148,6 +148,42 @@
 .settlement-panel-heading{display:flex;align-items:center;justify-content:space-between;gap:14px}
 .settlement-panel-heading h3{margin:0}
 .settlement-panel-heading .button{white-space:nowrap}
+.group-collapsible{display:block;margin:16px 0;border:1px solid #e8eae3;border-radius:14px;background:#fff;overflow:hidden}
+.group-collapsible>summary,.expense-month-group>summary{display:flex;align-items:center;justify-content:space-between;gap:14px;min-height:58px;padding:14px 18px;list-style:none;cursor:pointer;background:linear-gradient(100deg,#f5f8ef,#fff)}
+.group-collapsible>summary::-webkit-details-marker,.expense-month-group>summary::-webkit-details-marker{display:none}
+.group-collapsible>summary:focus-visible,.expense-month-group>summary:focus-visible{outline:3px solid #91b95f;outline-offset:-3px}
+.group-collapsible>summary>span:first-child,.expense-month-group>summary>span:first-child{display:grid;gap:4px}
+.group-collapsible>summary strong{font:700 14px Manrope,sans-serif;color:#30392a}
+.group-collapsible>summary small,.expense-month-group>summary small{font-size:10px;color:#818779}
+.group-collapsible[open]>summary,.expense-month-group[open]>summary{border-bottom:1px solid #eceee7}
+.group-collapsible .member-list,.group-collapsible .invite-panel{border:0;border-radius:0}
+.group-collapsible .invite-panel{padding:16px}
+.group-collapsible .settlement-panel{margin:12px 16px 16px}
+.group-collapsible.admin-tools{padding:0}
+.group-collapsible.admin-tools .splitwise-import{margin:0;border:0;border-radius:0;box-shadow:none}
+.settlement-panel.group-collapsible{padding:0}
+.settlement-panel.group-collapsible .settlement-panel-content{padding:0 18px 16px}
+.group-collapsible .balance-columns{padding:0 16px 16px}
+.group-collapsible.report-collapsible{padding:0}
+.report-section-content{padding:0 18px 18px}
+.report-section-content>.chart-switch{margin:14px 0}
+.expense-section{padding:0}
+.expense-section-content{padding:0 16px 16px}
+.expense-section-content>.section-title{margin:0 0 14px}
+.expense-month-group{padding:0}
+.expense-month-group>summary h3{margin:0;font:700 13px Manrope,sans-serif;color:#343a30;text-transform:capitalize}
+.expense-month-group>summary>strong{font:700 12px Manrope,sans-serif;color:#587a36;white-space:nowrap}
+.expense-month-group .expense-list{border:0;border-radius:0}
+.expense-personal-position{display:grid;gap:3px;margin-left:auto;text-align:right;font-size:11px}
+.expense-personal-position small{font-size:9px;color:#888e83}
+.expense-personal-position strong{font-size:11px}
+.expense-settled{color:#68745e}
+.recurrence-choice{display:flex!important;align-items:flex-start;gap:10px;padding:13px 15px;border:1px solid #dce8cc;border-radius:10px;background:#f6faef}
+.recurrence-choice>input{margin-top:3px;accent-color:#739a43}
+.recurrence-choice>span{display:grid;gap:4px}
+.recurrence-choice strong{font-size:11px;color:#35452a}
+.recurrence-choice small{font-size:10px;color:#7b8372;line-height:1.5}
+@media(max-width:700px){.expense-personal-position{width:100%;margin-left:43px;text-align:left}.group-collapsible>summary,.expense-month-group>summary{padding:12px}.expense-section-content{padding:0 10px 12px}}
 .settlement-form{margin-top:18px;padding:17px;border:1px solid #e8ece0;border-radius:12px;background:#fbfcf8}
 .settlement-form>p{margin:0 0 14px;color:#737b69;font-size:10px;line-height:1.5}
 .settlement-form-fields{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}

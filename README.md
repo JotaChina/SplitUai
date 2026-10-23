@@ -2,6 +2,14 @@
 
 Aplicação web para organizar despesas compartilhadas em grupos pequenos.
 
+### Mudanças em revisão em 2026-10-23 · aguardando migration
+
+O código em revisão acrescenta Internet em **Contas da Casa**, as categorias Viagens, Streaming, Fitness, Fatura de cartão e Acerto de outros grupos, e as subcategorias de Transporte. Os filtros e relatórios agrupam Contas da Casa e Transporte sem reclassificar despesas antigas. A lista mostra o saldo individual da pessoa autenticada por despesa e mantém o valor total como contexto. Os painéis do grupo e os meses da lista podem ser recolhidos por teclado ou mouse.
+
+Despesas recorrentes mensais sem término guardam um modelo separado e materializam registros somente até a competência atual. Uma chave única por série e mês evita duplicatas; ocorrências materializadas continuam sendo despesas normais. Ao abrir uma ocorrência recorrente para edição, a tela informa que somente aquela ocorrência será alterada. O botão de exclusão de uma ocorrência cria uma exceção para impedir que ela seja recriada.
+
+A migration `supabase/migrations/20261023001000_categorias_e_despesas_recorrentes.sql` está **pendente**. Em 2026-10-23, a conferência somente leitura confirmou as migrations 001–009 no Supabase remoto e as 001–004 no Supabase local. A migration não foi aplicada a nenhum banco. O banco local foi deixado intacto porque a cadeia 005–009 inclui uma reclassificação histórica; o `.env.local` não foi usado. Não publique o frontend antes de aplicar e validar a migration em ambiente aprovado. Nenhuma alteração foi publicada no GitHub Pages.
+
 ## Rodar localmente
 
 Requer Node.js 22.12+ (ou 20.19+ para compatibilidade com o Vite atual).

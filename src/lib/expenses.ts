@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-export type ExpenseCategory = 'hospedagem' | 'alimentacao' | 'transporte' | 'corrida' | 'atividades' | 'outros' | 'aluguel' | 'luz' | 'agua' | 'iptu'
+export type ExpenseCategory = 'hospedagem' | 'alimentacao' | 'transporte' | 'corrida' | 'atividades' | 'outros' | 'aluguel' | 'luz' | 'agua' | 'iptu' | 'internet' | 'viagens' | 'streaming' | 'fitness' | 'fatura_cartao' | 'acerto_outros_grupos' | 'transporte_gasolina' | 'transporte_aluguel_veiculo' | 'transporte_onibus' | 'transporte_aviao' | 'transporte_corrida_app' | 'transporte_pedagio' | 'transporte_multas' | 'transporte_ipva' | 'transporte_manutencao'
 export type SplitMode = 'equal' | 'percentage' | 'custom'
 export type ExpenseShare = { user_id: string; amount_cents: number; percentage?: number | null }
 export type ExpenseInstallment = {
@@ -28,6 +28,7 @@ export type ExpenseRecord = {
   updated_at: string
   split_mode: SplitMode
   rounding_remainder_cents: number
+  recurring_series_id: string | null
   shares: ExpenseShare[]
   installments: ExpenseInstallmentRecord[]
 }
@@ -220,8 +221,12 @@ export function generateMonthlySchedule(totalCents: number, count: number, first
 }
 
 export async function listGroupExpenses(client: SupabaseClient, groupId: string) {
+  const today = new Date()
+  const currentMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-01`
+  const generated = await client.rpc('ensure_recurring_expenses_through', { p_group_id: groupId, p_through_month: currentMonth })
+  if (generated.error && !['42883','PGRST202'].includes(generated.error.code ?? '')) throw generated.error
   const { data: expenseRows, error: expensesError } = await client.from('expenses')
-    .select('id, group_id, created_by, paid_by, description, category, amount_cents, currency, expense_date, notes, created_at, updated_at, split_mode, rounding_remainder_cents')
+    .select('id, group_id, created_by, paid_by, description, category, amount_cents, currency, expense_date, notes, created_at, updated_at, split_mode, rounding_remainder_cents, recurring_series_id')
     .eq('group_id', groupId).order('expense_date', { ascending: false }).order('created_at', { ascending: false })
   if (expensesError) throw expensesError
   const expenses = (expenseRows ?? []) as Omit<ExpenseRecord, 'shares' | 'installments'>[]
@@ -328,6 +333,12 @@ function rpcValues(input: ExpenseInput) {
 
 export async function createExpense(client: SupabaseClient, groupId: string, input: ExpenseInput) {
   const { data, error } = await client.rpc('create_expense_with_schedule', { p_group_id: groupId, ...rpcValues(input) })
+  if (error) throw error
+  return data as string
+}
+export async function createRecurringExpense(client: SupabaseClient, groupId: string, input: ExpenseInput) {
+  if (input.installments.length !== 1) throw new Error('Uma despesa recorrente usa um valor mensal e uma ocorrência por competência.')
+  const { data, error } = await client.rpc('create_recurring_expense', { p_group_id: groupId, p_template: rpcValues(input) })
   if (error) throw error
   return data as string
 }

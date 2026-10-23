@@ -14,6 +14,7 @@ export type GroupMemberRecord = {
   user_id: string
   role: 'admin' | 'member'
   joined_at: string
+  active: boolean
 }
 
 export type GroupProfileRecord = {
@@ -25,10 +26,12 @@ export type GroupProfileRecord = {
 export type GroupInvitationRecord = {
   id: string
   invited_email: string
-  status: 'pending' | 'sent' | 'revoked' | 'expired'
+  status: 'pending' | 'sent' | 'accepted' | 'revoked' | 'expired'
   created_at: string
   expires_at: string
 }
+
+export type MyGroupInvitation = GroupInvitationRecord & { group_id: string; group_name: string }
 
 export type GroupMemberView = GroupMemberRecord & {
   display_name: string | null
@@ -102,12 +105,12 @@ export async function updateGroup(
 export async function getGroupMembers(client: SupabaseClient, groupId: string) {
   const { data: memberRows, error: memberError } = await client
     .from('group_members')
-    .select('group_id, user_id, role, joined_at')
+    .select('group_id, user_id, role, joined_at, active, display_name')
     .eq('group_id', groupId)
     .order('joined_at', { ascending: true })
 
   if (memberError) throw memberError
-  const members = (memberRows ?? []) as GroupMemberRecord[]
+  const members = (memberRows ?? []) as (GroupMemberRecord & { display_name: string | null })[]
   if (!members.length) return [] as GroupMemberView[]
 
   const { data: profileRows, error: profileError } = await client
@@ -120,7 +123,7 @@ export async function getGroupMembers(client: SupabaseClient, groupId: string) {
 
   return members.map((member) => ({
     ...member,
-    display_name: profiles.get(member.user_id)?.display_name ?? null,
+    display_name: member.display_name ?? profiles.get(member.user_id)?.display_name ?? null,
     username: profiles.get(member.user_id)?.username ?? null,
   }))
 }
@@ -154,24 +157,38 @@ export async function listGroupInvitations(client: SupabaseClient, groupId: stri
 
 export async function createGroupInvitation(
   client: SupabaseClient,
-  userId: string,
   groupId: string,
   email: string,
 ) {
-  const normalizedEmail = email.trim().toLowerCase()
-  const expiresAt = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000).toISOString()
-  const { data, error } = await client
-    .from('group_invitations')
-    .insert({
-      group_id: groupId,
-      invited_email: normalizedEmail,
-      invited_by: userId,
-      status: 'pending',
-      expires_at: expiresAt,
-    })
-    .select('id, invited_email, status, created_at, expires_at')
-    .single()
-
+  const { data, error } = await client.rpc('manage_group_invitation', { p_group_id: groupId, p_email: email, p_action: 'create', p_invitation_id: null })
   if (error) throw error
-  return data as GroupInvitationRecord
+  const { data: invite, error: readError } = await client.from('group_invitations').select('id, invited_email, status, created_at, expires_at').eq('id', data).single()
+  if (readError) throw readError
+  return invite as GroupInvitationRecord
+}
+
+export async function manageGroupInvitation(client: SupabaseClient, groupId: string, invitationId: string, action: 'resend' | 'cancel') {
+  const { error } = await client.rpc('manage_group_invitation', { p_group_id: groupId, p_email: '', p_action: action, p_invitation_id: invitationId })
+  if (error) throw error
+}
+
+export async function updateGroupMember(client: SupabaseClient, groupId: string, userId: string, role: 'admin' | 'member', displayName: string | null) {
+  const { error } = await client.rpc('update_group_member', { p_group_id: groupId, p_user_id: userId, p_role: role, p_display_name: displayName })
+  if (error) throw error
+}
+
+export async function removeGroupMember(client: SupabaseClient, groupId: string, userId: string) {
+  const { error } = await client.rpc('remove_group_member', { p_group_id: groupId, p_user_id: userId })
+  if (error) throw error
+}
+
+export async function listMyGroupInvitations(client: SupabaseClient) {
+  const { data, error } = await client.rpc('list_my_group_invitations')
+  if (error) throw error
+  return (data ?? []) as MyGroupInvitation[]
+}
+
+export async function acceptGroupInvitation(client: SupabaseClient, invitationId: string) {
+  const { error } = await client.rpc('accept_group_invitation', { p_invitation_id: invitationId })
+  if (error) throw error
 }

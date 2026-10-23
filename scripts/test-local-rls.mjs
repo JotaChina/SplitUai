@@ -114,7 +114,7 @@ try {
 
   const memberEmail = accounts.member.email
   const createdInvitation = await createGroupInvitation(
-    adminSession.client, adminUser.id, group1.id, `  ${memberEmail.toUpperCase()}  `,
+    adminSession.client, group1.id, `  ${memberEmail.toUpperCase()}  `,
   )
   assert(createdInvitation.invited_email === memberEmail,
     'função real do app normaliza o e-mail e permite convite a admin')
@@ -126,7 +126,7 @@ try {
   assert(memberMembership.role === 'member',
     'criação da conta Auth com convite pendente associa somente o e-mail convidado como membro')
 
-  await createGroupInvitation(adminSession.client, adminUser.id, group1.id, accounts.member2.email)
+  await createGroupInvitation(adminSession.client, group1.id, accounts.member2.email)
   const member2User = await provisionUser(accounts.member2)
   const member2Session = await signIn(accounts.member2)
   const { data: member2Membership, error: member2MembershipError } = await member2Session.client
@@ -137,7 +137,7 @@ try {
   const { data: invitation, error: invitationReadError } = await adminSession.client
     .from('group_invitations').select('status').eq('group_id', group1.id).eq('invited_email', memberEmail).single()
   if (invitationReadError) throw invitationReadError
-  assert(invitation.status === 'sent', 'trigger consome o convite pendente ao criar a conta Auth')
+  assert(invitation.status === 'accepted', 'trigger consome o convite pendente ao criar a conta Auth')
   const { data: memberInvitations, error: memberInvitationsError } = await memberSession.client
     .from('group_invitations').select('id').eq('group_id', group1.id)
   if (memberInvitationsError) throw memberInvitationsError
@@ -160,9 +160,10 @@ try {
   if (outsiderMembershipError) throw outsiderMembershipError
   assert(outsiderOwnMembership.role === 'admin', 'criador do segundo grupo também recebe papel admin')
 
-  const usernameSet = await adminSession.client.rpc('set_my_username', { p_username: ' Ana_Parte ' })
-  assert(usernameSet.data === 'ana_parte' && !usernameSet.error, 'identificador é normalizado para minúsculas e espaços externos são removidos')
-  const duplicateUsername = await memberSession.client.rpc('set_my_username', { p_username: 'ANA_PARTE' })
+  const testUsername = `ana_${suffix.replace(/\D/g, '').slice(-12)}`
+  const usernameSet = await adminSession.client.rpc('set_my_username', { p_username: ` ${testUsername.toUpperCase()} ` })
+  assert(usernameSet.data === testUsername && !usernameSet.error, 'identificador é normalizado para minúsculas e espaços externos são removidos')
+  const duplicateUsername = await memberSession.client.rpc('set_my_username', { p_username: testUsername.toUpperCase() })
   assert(Boolean(duplicateUsername.error), 'identificador duplicado sem diferenciar maiúsculas é recusado')
   const reservedUsername = await memberSession.client.rpc('set_my_username', { p_username: 'admin' })
   assert(Boolean(reservedUsername.error), 'identificador reservado é recusado pelo banco')
@@ -171,7 +172,7 @@ try {
   const { data: peerProfile, error: peerProfileError } = await memberSession.client.from('profiles')
     .select('username').eq('id', adminUser.id).single()
   if (peerProfileError) throw peerProfileError
-  assert(peerProfile.username === 'ana_parte', 'membro consulta o @ público de colega do grupo sem consultar e-mail')
+  assert(peerProfile.username === testUsername, 'membro consulta o @ público de colega do grupo sem consultar e-mail')
   const { data: noUsernameProfile, error: noUsernameError } = await memberSession.client.from('profiles')
     .select('username').eq('id', memberUser.id).single()
   if (noUsernameError) throw noUsernameError
@@ -179,12 +180,13 @@ try {
   const { data: forbiddenProfileUpdate, error: forbiddenProfileError } = await adminSession.client.from('profiles')
     .update({ username: 'hijack_name' }).eq('id', memberUser.id).select('id')
   assert(Boolean(forbiddenProfileError) || !forbiddenProfileUpdate?.length, 'usuário não altera identificador de outra pessoa por escrita direta')
-  const unauthorizedProfile = await outsiderSession.client.rpc('set_my_username', { p_username: 'admin_other' })
+  const outsiderUsername = `out_${suffix.replace(/\D/g, '').slice(-12)}`
+  const unauthorizedProfile = await outsiderSession.client.rpc('set_my_username', { p_username: outsiderUsername })
   assert(!unauthorizedProfile.error, 'usuário pode escolher o próprio identificador mesmo fora do grupo')
   const { data: selfProfile, error: selfProfileError } = await outsiderSession.client.from('profiles')
     .select('username').eq('id', outsiderUser.id).single()
   if (selfProfileError) throw selfProfileError
-  assert(selfProfile.username === 'admin_other', 'usuário lê seu identificador mesmo sem grupo compartilhado')
+  assert(selfProfile.username === outsiderUsername, 'usuário lê seu identificador mesmo sem grupo compartilhado')
 
   const memberIds = [adminUser.id, memberUser.id, member2User.id]
   const sharesFor = (amountCents, ids = memberIds) => splitEvenly(amountCents, ids)
@@ -467,6 +469,70 @@ try {
     expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
   })
   assert(Boolean(memberInviteError), 'membro comum não cria convite')
+
+  const pendingForOutsider = await createGroupInvitation(adminSession.client, group1.id, accounts.outsider.email)
+  const outsiderInbox = await outsiderSession.client.rpc('list_my_group_invitations')
+  const isolatedInbox = await isolatedSession.client.rpc('list_my_group_invitations')
+  assert(!outsiderInbox.error && outsiderInbox.data.some((row) => row.id === pendingForOutsider.id)
+    && !isolatedInbox.error && isolatedInbox.data.length === 0,
+  'caixa de entrada mostra apenas convites destinados ao e-mail autenticado')
+  const duplicateInvite = await adminSession.client.rpc('manage_group_invitation', {
+    p_group_id: group1.id, p_email: accounts.outsider.email, p_action: 'create', p_invitation_id: null,
+  })
+  assert(Boolean(duplicateInvite.error), 'convites duplicados ativos são recusados pelo servidor')
+  const outsiderAccept = await outsiderSession.client.rpc('accept_group_invitation', { p_invitation_id: pendingForOutsider.id })
+  assert(!outsiderAccept.error && outsiderAccept.data === group1.id, 'destinatário autenticado aceita convite válido')
+  const outsiderMembershipNow = await adminSession.client.from('group_members').select('active').eq('group_id', group1.id).eq('user_id', outsiderUser.id).single()
+  const acceptedInviteStatus = await adminSession.client.from('group_invitations').select('status').eq('id', pendingForOutsider.id).single()
+  assert(outsiderMembershipNow.data?.active && acceptedInviteStatus.data?.status === 'accepted', 'aceite ativa a associação e atualiza o status do convite')
+  const wrongInviteAccept = await isolatedSession.client.rpc('accept_group_invitation', { p_invitation_id: pendingForOutsider.id })
+  assert(Boolean(wrongInviteAccept.error), 'outra conta não aceita convite alheio')
+  const invitationForIsolated = await createGroupInvitation(adminSession.client, group1.id, accounts.isolated.email)
+  const firstExpiry = (await adminSession.client.from('group_invitations').select('expires_at').eq('id', invitationForIsolated.id).single()).data.expires_at
+  const resentInvite = await adminSession.client.rpc('manage_group_invitation', {
+    p_group_id: group1.id, p_email: '', p_action: 'resend', p_invitation_id: invitationForIsolated.id,
+  })
+  const renewedInvite = await adminSession.client.from('group_invitations').select('status,expires_at').eq('id', invitationForIsolated.id).single()
+  assert(!resentInvite.error && renewedInvite.data?.status === 'pending' && renewedInvite.data.expires_at > firstExpiry,
+    'admin pode renovar convite pendente e estender a validade')
+  const canceledInvite = await adminSession.client.rpc('manage_group_invitation', {
+    p_group_id: group1.id, p_email: '', p_action: 'cancel', p_invitation_id: invitationForIsolated.id,
+  })
+  const canceledInbox = await isolatedSession.client.rpc('list_my_group_invitations')
+  assert(!canceledInvite.error && canceledInbox.data.every((row) => row.id !== invitationForIsolated.id),
+    'admin cancela convite pendente e ele deixa de aparecer na caixa de entrada')
+
+  const memberEdit = await adminSession.client.rpc('update_group_member', {
+    p_group_id: group1.id, p_user_id: memberUser.id, p_role: 'admin', p_display_name: 'Pessoa do grupo',
+  })
+  const updatedMember = await adminSession.client.from('group_members').select('role,display_name').eq('group_id', group1.id).eq('user_id', memberUser.id).single()
+  assert(!memberEdit.error && updatedMember.data?.role === 'admin' && updatedMember.data?.display_name === 'Pessoa do grupo',
+    'admin altera papel e nome de exibição específico do grupo via RPC')
+  const lastAdminDemotion = await adminSession.client.rpc('update_group_member', {
+    p_group_id: group2.id, p_user_id: outsiderUser.id, p_role: 'member', p_display_name: null,
+  })
+  assert(Boolean(lastAdminDemotion.error), 'banco impede rebaixar o último administrador do grupo')
+
+  const preservedExpenseId = await createExpense(adminSession.client, group1.id, expenseValues(600, sharesFor(600), {
+    description: `${prefix} histórico preservado`, paidBy: member2User.id,
+  }))
+  const removal = await adminSession.client.rpc('remove_group_member', { p_group_id: group1.id, p_user_id: member2User.id })
+  const preservedShare = await adminSession.client.from('expense_shares').select('user_id').eq('user_id', member2User.id).limit(1)
+  const removedMembership = await adminSession.client.from('group_members').select('active').eq('group_id', group1.id).eq('user_id', member2User.id).single()
+  const removedUserRead = await member2Session.client.from('groups').select('id').eq('id', group1.id).maybeSingle()
+  const formerUserExpenses = await member2Session.client.from('expenses').select('id').eq('id', preservedExpenseId)
+  const preservedHistory = await listGroupExpenses(adminSession.client, group1.id)
+  const preservedRecord = preservedHistory.find((expense) => expense.id === preservedExpenseId)
+  const historyBalances = calculateBalances(preservedHistory, memberIds)
+  assert(!removal.error && removedMembership.data?.active === false && preservedShare.data?.length > 0
+    && !removedUserRead.data && formerUserExpenses.data?.length === 0
+    && preservedRecord?.installments.length === 1 && historyBalances.reduce((sum, row) => sum + row.balance_cents, 0) === 0,
+  `remoção encerra acesso e preserva associação e rateios históricos (rpc=${removal.error?.message ?? 'ok'}, active=${removedMembership.data?.active}, shares=${preservedShare.data?.length}, groupReadable=${Boolean(removedUserRead.data)})`)
+
+  const demotionAfterTransfer = await adminSession.client.rpc('update_group_member', {
+    p_group_id: group1.id, p_user_id: adminUser.id, p_role: 'member', p_display_name: null,
+  })
+  assert(!demotionAfterTransfer.error, 'admin pode transferir a administração após promover outro participante')
 
   assert(group2.id !== group1.id && isolatedUser.id !== adminUser.id,
     'contas e grupos de teste são independentes')

@@ -265,6 +265,8 @@ Na revisão inicial, as funções auxiliares `is_current_user_group_member`, `is
 | 2026-10-23 | `@usuario` público, normalizado, 3–24 caracteres e único sem diferenciar caixa; e-mail não aparece em listas comuns. | Aprovado e validado localmente; usuário pode permanecer sem identificador |
 | 2026-10-23 | Rateio igual usa cotas iguais arredondadas para baixo e atribui o resto ao pagador; percentuais distribuem resto por maiores frações; valores personalizados fecham exatamente. | Aprovado e testado com centavos locais |
 | 2026-10-23 | Parcelas afetam saldos no mês de vencimento; mostrar saldos mensal e total lado a lado. “Quanto falta” é dívida líquida ainda não acertada. | Aprovado; implementado/testado local; pagamento de parcelas não é registrado |
+| 2026-10-23 | Participantes removidos ficam inativos no grupo; vínculos financeiros permanecem para preservar despesas, parcelas e saldos. | Migration 007 aplicada e validada localmente com checks RLS; não aplicada ao remoto |
+| 2026-10-23 | Convites são autorizados e administrados por RPC/RLS; Auth por e-mail continua sendo enviado pelo painel Supabase, sem segredo privilegiado no navegador. | Fluxos locais validados; envio automático pelo app depende de função de servidor e provedor de e-mail |
 
 ## Notas operacionais
 

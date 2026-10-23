@@ -4,6 +4,11 @@ import { supabase } from './lib/supabase'
 import {
   createGroup,
   createGroupInvitation,
+  manageGroupInvitation,
+  updateGroupMember,
+  removeGroupMember,
+  listMyGroupInvitations,
+  acceptGroupInvitation,
   deleteEmptyGroup,
   getGroupMembers,
   listGroupInvitations,
@@ -14,6 +19,7 @@ import {
   type GroupInvitationRecord,
   type GroupMemberView,
   type GroupRecord,
+  type MyGroupInvitation,
 } from './lib/groups'
 import {
   createExpense,
@@ -32,7 +38,7 @@ import {
   type ExpenseRecord,
 } from './lib/expenses'
 
-type Page = 'groups' | 'group' | 'new-group' | 'expense' | 'account'
+type Page = 'groups' | 'group' | 'new-group' | 'expense' | 'account' | 'invitations'
 
 function App() {
   const [page, setPage] = useState<Page>('groups')
@@ -46,6 +52,7 @@ function App() {
   const [groupsError, setGroupsError] = useState<string | null>(null)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
   const [editingExpense, setEditingExpense] = useState<ExpenseRecord | null>(null)
+  const [myInvitations, setMyInvitations] = useState<MyGroupInvitation[]>([])
 
   async function refreshGroups() {
     if (!supabase) return
@@ -92,7 +99,19 @@ function App() {
       return
     }
     void refreshGroups()
+    if (supabase) void listMyGroupInvitations(supabase).then(setMyInvitations).catch(() => setMyInvitations([]))
   }, [session?.user.id])
+
+  async function refreshMyInvitations() {
+    if (supabase) setMyInvitations(await listMyGroupInvitations(supabase))
+  }
+
+  async function acceptMyInvitation(id: string) {
+    if (!supabase) throw new Error('Autenticação não configurada.')
+    await acceptGroupInvitation(supabase, id)
+    await refreshMyInvitations()
+    await refreshGroups()
+  }
 
   async function signIn(email: string, password: string) {
     if (!supabase) return
@@ -162,6 +181,9 @@ function App() {
           <button className={page === 'account' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('account')}>
             <span className="nav-icon">◎</span> Minha conta
           </button>
+          <button className={page === 'invitations' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('invitations')}>
+            <span className="nav-icon">✉</span> Convites recebidos{myInvitations.length > 0 ? ` · ${myInvitations.length}` : ''}
+          </button>
         </nav>
         <div className="sidebar-bottom">
           <div className="help-card"><span className="help-icon">✳</span><strong>Dividir fica leve.</strong><p>Organize os gastos e aproveite o que importa.</p></div>
@@ -178,6 +200,7 @@ function App() {
         {page === 'group' && !selectedGroupId && <Groups groups={groups} loading={groupsLoading} error={groupsError} onRefresh={() => void refreshGroups()} onOpen={(id) => { setSelectedGroupId(id); setPage('group') }} onCreate={() => setPage('new-group')} />}
         {page === 'expense' && selectedGroupId && supabase && <Expense client={supabase} groupId={selectedGroupId} groupName={groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo'} userId={session.user.id} expense={editingExpense} onBack={() => { setEditingExpense(null); setPage('group') }} onSaved={() => { setEditingExpense(null); setPage('group') }} />}
         {page === 'account' && supabase && <Account client={supabase} email={session.user.email ?? ''} userId={session.user.id} onSignOut={signOut} busy={authBusy} />}
+        {page === 'invitations' && <MyInvitations invitations={myInvitations} onRefresh={() => void refreshMyInvitations()} onAccept={acceptMyInvitation} />}
       </main>
     </div>
   )
@@ -242,7 +265,7 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense }:
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
   const [categoryFilter, setCategoryFilter] = useState<ExpenseCategory | 'all'>('all')
-  const isAdmin = members.some((member) => member.user_id === userId && member.role === 'admin')
+  const isAdmin = members.some((member) => member.user_id === userId && member.active && member.role === 'admin')
   const allBalances = calculateBalances(groupExpenses, members.map((member) => member.user_id))
   const localNow = new Date()
   const currentMonth = `${localNow.getFullYear()}-${String(localNow.getMonth() + 1).padStart(2, '0')}`
@@ -281,7 +304,8 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense }:
         setInvitations(inviteData)
         setGroupExpenses(expenseData)
       } catch (reason) {
-        if (active) setError(reason instanceof Error ? reason.message : 'Não foi possível carregar o grupo.')
+        const code = typeof reason === 'object' && reason !== null && 'code' in reason ? String(reason.code) : ''
+        if (active) setError(code === '42501' ? 'Seu acesso a este grupo foi encerrado ou sua conta não tem permissão para esta operação.' : reason instanceof Error ? reason.message : 'Não foi possível carregar o grupo.')
       } finally {
         if (active) setLoading(false)
       }
@@ -310,15 +334,48 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense }:
     setError(null)
     setNotice(null)
     try {
-      const created = await createGroupInvitation(client, userId, groupId, email)
+      const created = await createGroupInvitation(client, groupId, email)
       setInvitations((current) => [created, ...current])
       setEmail('')
-      setNotice(`Convite pendente criado para ${created.invited_email}. Agora envie o convite Auth pelo painel Supabase; o app não envia e-mail.`)
+      setNotice(`Convite criado para ${created.invited_email}. Para enviar, use Authentication → Users → Invite user no painel Supabase com este e-mail.`)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Não foi possível criar o convite. Verifique se já há um convite pendente para este e-mail.')
     } finally {
       setBusy(false)
     }
+  }
+
+  async function invitationAction(invitation: GroupInvitationRecord, action: 'resend' | 'cancel') {
+    setBusy(true); setError(null)
+    try {
+      await manageGroupInvitation(client, groupId, invitation.id, action)
+      const fresh = await listGroupInvitations(client, groupId)
+      setInvitations(fresh)
+      setNotice(action === 'cancel' ? 'Convite cancelado.' : 'Convite renovado por 14 dias. Reenvie pelo painel do Supabase Auth.')
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível atualizar o convite.') }
+    finally { setBusy(false) }
+  }
+
+  async function memberRole(member: GroupMemberView, role: 'admin' | 'member') {
+    setBusy(true); setError(null)
+    try { await updateGroupMember(client, groupId, member.user_id, role, member.display_name); setMembers(await getGroupMembers(client, groupId)) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível alterar o papel.') }
+    finally { setBusy(false) }
+  }
+
+  async function memberRemove(member: GroupMemberView) {
+    if (!window.confirm(`Remover ${member.username ? `@${member.username}` : member.display_name || 'este participante'}? O acesso será encerrado e o histórico financeiro será preservado.`)) return
+    setBusy(true); setError(null)
+    try { await removeGroupMember(client, groupId, member.user_id); setMembers(await getGroupMembers(client, groupId)) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível remover o participante.') }
+    finally { setBusy(false) }
+  }
+
+  async function memberName(member: GroupMemberView, displayName: string) {
+    setBusy(true); setError(null)
+    try { await updateGroupMember(client, groupId, member.user_id, member.role, displayName || null); setMembers(await getGroupMembers(client, groupId)) }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível editar os dados do participante.') }
+    finally { setBusy(false) }
   }
 
   async function removeExpense(expense: ExpenseRecord) {
@@ -374,8 +431,8 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense }:
     return dueDate < today ? 'Vencimento passado' : 'A vencer'
   }
   return <section className="page-wrap"><button className="back-link" onClick={onBack}>← Voltar aos grupos</button><div className="detail-hero"><div><div className="eyebrow">{group.archived_at ? 'GRUPO ARQUIVADO' : 'GRUPO'} · CRIADO EM {new Date(group.created_at).toLocaleDateString('pt-BR')}</div>{editing ? <form className="group-edit-form" onSubmit={(event) => void saveDetails(event)}><label>Nome<input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} required /></label><label>Descrição<textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1000} rows={2} /></label><div className="form-actions"><button type="button" className="button button-light" onClick={() => { setName(group.name); setDescription(group.description ?? ''); setEditing(false) }}>Cancelar</button><button className="button button-dark" disabled={busy}>Salvar</button></div></form> : <><h1>{group.name}<span className="heading-dot">.</span></h1><p>{group.description || 'Organize as despesas com seus participantes.'}</p>{isAdmin && <button className="text-button" onClick={() => setEditing(true)}>Editar informações</button>}</>}<div className="detail-people"><span>{members.length} {members.length === 1 ? 'participante' : 'participantes'} · Seu papel: {isAdmin ? 'admin' : 'membro'}</span></div><div className="heading-actions"><button className="button button-light" onClick={() => void archiveGroup()} disabled={busy}>{group.archived_at ? 'Restaurar grupo' : 'Arquivar grupo'}</button>{canDeleteGroup && <button className="button button-light" onClick={() => void permanentlyDeleteGroup()} disabled={busy}>Excluir grupo</button>}</div>{groupExpenses.length > 0 && <small>Grupos com despesas podem ser arquivados; o histórico não pode ser apagado.</small>}</div><div className="detail-illustration">✳</div></div>{error && <p className="auth-error" role="alert">{error}</p>}
-    <div className="section-title"><div><h2>Participantes</h2><p>Somente integrantes deste grupo aparecem aqui.</p></div></div><div className="member-list">{members.map((member) => <div className="member-row" key={member.user_id}><span className="avatar avatar-you">{(member.username?.[0] ?? member.display_name?.[0] ?? 'P').toUpperCase()}</span><span className="member-name">{member.username ? `@${member.username}` : member.display_name || 'Sem identificador'}</span><span className="role-badge">{member.role === 'admin' ? 'Administrador' : 'Membro'}</span></div>)}</div>
-    {isAdmin && <><div className="section-title"><div><h2>Convites</h2><p>Crie o registro e depois envie o e-mail pelo painel Auth.</p></div></div><div className="invite-panel"><form className="invite-form" onSubmit={(event) => void invite(event)}><label>E-mail da pessoa<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required placeholder="pessoa@email.com" disabled={busy} /></label><button className="button button-dark" disabled={busy}>{busy ? 'Criando…' : 'Criar convite'}</button></form><p className="invite-help">Após criar, no projeto Supabase correto, abra Authentication → Users → Add user → Send invitation e use este mesmo e-mail. O trigger do banco associa a conta ao grupo quando a conta Auth é criada. Nenhum e-mail é enviado pelo app.</p>{notice && <p className="auth-message" role="status">{notice}</p>}{invitations.length > 0 && <div className="invitation-list">{invitations.map((invitation) => <div className="invitation-row" key={invitation.id}><div><strong>{invitation.invited_email}</strong><small>Expira em {new Date(invitation.expires_at).toLocaleDateString('pt-BR')}</small></div><span className={`invite-status status-${invitation.status}`}>{invitation.status === 'pending' ? 'Pendente' : invitation.status === 'sent' ? 'Enviado' : invitation.status === 'revoked' ? 'Revogado' : 'Expirado'}</span></div>)}</div>}</div></>}
+    <div className="section-title"><div><h2>Participantes</h2><p>Participantes removidos continuam no histórico das despesas e dos saldos.</p></div></div><div className="member-list">{members.map((member) => <div className="member-row" key={member.user_id}><span className="avatar avatar-you">{(member.username?.[0] ?? member.display_name?.[0] ?? 'P').toUpperCase()}</span><span className="member-name">{member.username ? `@${member.username}` : member.display_name || 'Sem identificador'}{!member.active && <small> · Acesso encerrado</small>}</span><span className="role-badge">{member.role === 'admin' ? 'Administrador' : 'Membro'}</span>{isAdmin && member.active && member.user_id !== userId && <><input className="member-label-input" aria-label={`Nome neste grupo para ${member.username ?? member.display_name ?? 'participante'}`} placeholder="Nome neste grupo" defaultValue={member.display_name ?? ''} maxLength={80} disabled={busy} onBlur={(event) => { if (event.target.value !== (member.display_name ?? '')) void memberName(member, event.target.value.trim()) }} /><select aria-label={`Papel de ${member.username ?? member.display_name ?? 'participante'}`} value={member.role} disabled={busy} onChange={(event) => void memberRole(member, event.target.value as 'admin' | 'member')}><option value="member">Membro</option><option value="admin">Administrador</option></select><button className="text-button" disabled={busy} onClick={() => void memberRemove(member)}>Remover</button></>}</div>)}</div>
+    {isAdmin && <><div className="section-title"><div><h2>Convites</h2><p>Registre um convite e envie pelo Supabase Auth com a mesma conta e e-mail.</p></div></div><div className="invite-panel"><form className="invite-form" onSubmit={(event) => void invite(event)}><label>E-mail da pessoa<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required placeholder="pessoa@email.com" disabled={busy} /></label><button className="button button-dark" disabled={busy}>{busy ? 'Criando…' : 'Criar convite'}</button></form><p className="invite-help">O app valida e registra o convite com segurança no banco. Para entrega, abra Authentication → Users → Invite user no painel do projeto Supabase e use o e-mail registrado. Reenvios renovam a validade; o e-mail deve ser reenviado pelo painel.</p>{notice && <p className="auth-message" role="status">{notice}</p>}{invitations.length > 0 && <div className="invitation-list">{invitations.map((invitation) => { const expired = ['pending','sent'].includes(invitation.status) && new Date(invitation.expires_at) <= new Date(); const status = expired ? 'expired' : invitation.status; return <div className="invitation-row" key={invitation.id}><div><strong>{invitation.invited_email}</strong><small>Expira em {new Date(invitation.expires_at).toLocaleDateString('pt-BR')}</small></div><span className={`invite-status status-${status}`}>{status === 'pending' ? 'Pendente' : status === 'sent' ? 'Enviado' : status === 'accepted' ? 'Aceito' : status === 'revoked' ? 'Cancelado' : 'Expirado'}</span>{isAdmin && ['pending','sent'].includes(invitation.status) && !expired && <><button className="text-button" disabled={busy} onClick={() => void invitationAction(invitation,'resend')}>Reenviar</button><button className="text-button" disabled={busy} onClick={() => void invitationAction(invitation,'cancel')}>Cancelar</button></>}</div> })}</div>}</div></>}
     <div className="detail-stats"><div><small>DESPESAS DO GRUPO</small><strong>{groupExpenses.length}</strong></div><div><small>PARTICIPANTES</small><strong>{members.length}</strong></div><div><small>VALOR DEVEDOR TOTAL</small><strong>{formatBrlCents(allTimeDebtTotal)}</strong></div><button className="button button-dark" onClick={onAddExpense}><span>＋</span> Nova despesa</button></div>
     <div className="section-title detail-section-title"><div><h2>Saldos em paralelo</h2><p>As parcelas afetam o mês em que vencem; o total soma todo o cronograma.</p></div></div>
     <div className="balance-columns"><section className="settlement-panel"><h3>Saldo do mês · {new Date(`${currentMonth}-01T12:00:00`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}</h3>{renderBalances(monthBalances)}<strong>Total devedor do mês: {formatBrlCents(monthDebtTotal)}</strong></section><section className="settlement-panel"><h3>Saldo de todo o período</h3>{renderBalances(allBalances)}<strong>Falta acertar: {formatBrlCents(allTimeDebtTotal)}</strong></section></div>
@@ -386,6 +443,8 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense }:
 
 function Expense({ client, groupId, groupName, userId, expense, onBack, onSaved }: { client: NonNullable<typeof supabase>; groupId: string; groupName: string; userId: string; expense: ExpenseRecord | null; onBack: () => void; onSaved: () => void }) {
   const [members, setMembers] = useState<GroupMemberView[]>([])
+  const activeMembers = members.filter((member) => member.active)
+  const includesFormerParticipant = Boolean(expense && [expense.paid_by, ...expense.shares.map((share) => share.user_id)].some((id) => members.some((member) => member.user_id === id && !member.active)))
   const [description, setDescription] = useState(expense?.description ?? '')
   const [amount, setAmount] = useState(expense ? `${Math.floor(expense.amount_cents / 100)},${String(expense.amount_cents % 100).padStart(2, '0')}` : '')
   const [paidBy, setPaidBy] = useState(expense?.paid_by ?? userId)
@@ -408,9 +467,10 @@ function Expense({ client, groupId, groupName, userId, expense, onBack, onSaved 
       if (!active) return
       setMembers(rows)
       if (!expense) {
-        setParticipantIds(rows.map((member) => member.user_id))
-        if (rows.some((member) => member.user_id === userId)) setPaidBy(userId)
-        else if (rows[0]) setPaidBy(rows[0].user_id)
+        const currentMembers = rows.filter((member) => member.active)
+        setParticipantIds(currentMembers.map((member) => member.user_id))
+        if (currentMembers.some((member) => member.user_id === userId)) setPaidBy(userId)
+        else if (currentMembers[0]) setPaidBy(currentMembers[0].user_id)
       }
     }).catch((reason: unknown) => {
       if (active) setError(reason instanceof Error ? reason.message : 'Não foi possível carregar os participantes.')
@@ -464,12 +524,12 @@ function Expense({ client, groupId, groupName, userId, expense, onBack, onSaved 
   const totalPercent = participantIds.reduce((sum, id) => sum + Number(percentageInputs[id] ?? 0), 0)
   const installmentsPreview = parsedAmount && preview && !previewError ? generateMonthlySchedule(parsedAmount, Number(installmentCount), firstDueDate, preview.shares, preview.remainderCents) : []
 
-  return <section className="page-wrap form-wrap"><button className="back-link" onClick={onBack}>← Voltar ao grupo</button><div className="eyebrow">{groupName}</div><h1>{expense ? 'Editar despesa' : 'Nova despesa'}<span className="heading-dot">.</span></h1><p className="form-intro">Registre o gasto, escolha como dividir e confira as parcelas antes de salvar.</p>{loading ? <p className="auth-loading">Carregando participantes…</p> : <form onSubmit={(event) => void submit(event)}>
+  return <section className="page-wrap form-wrap"><button className="back-link" onClick={onBack}>← Voltar ao grupo</button><div className="eyebrow">{groupName}</div><h1>{expense ? 'Editar despesa' : 'Nova despesa'}<span className="heading-dot">.</span></h1><p className="form-intro">Registre o gasto, escolha como dividir e confira as parcelas antes de salvar.</p>{includesFormerParticipant && <p className="invite-help">Esta despesa inclui participante removido. O registro e as parcelas foram preservados e não podem ser recalculados.</p>}{loading ? <p className="auth-loading">Carregando participantes…</p> : <form onSubmit={(event) => void submit(event)}>
     <label>Descrição<input value={description} onChange={(event) => setDescription(event.target.value)} maxLength={200} required placeholder="Ex.: almoço na praia" disabled={busy} /></label>
-    <div className="form-two"><label>Valor total<div className="money-input"><span>R$</span><input value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" required placeholder="0,00" disabled={busy} /></div></label><label>Quem pagou?<select value={paidBy} onChange={(event) => setPaidBy(event.target.value)} required disabled={busy}><option value="" disabled>Selecione</option>{members.map((member) => <option key={member.user_id} value={member.user_id}>{memberLabel(member)}{member.user_id === userId ? ' (você)' : ''}</option>)}</select></label></div>
+    <div className="form-two"><label>Valor total<div className="money-input"><span>R$</span><input value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" required placeholder="0,00" disabled={busy} /></div></label><label>Quem pagou?<select value={paidBy} onChange={(event) => setPaidBy(event.target.value)} required disabled={busy}><option value="" disabled>Selecione</option>{activeMembers.map((member) => <option key={member.user_id} value={member.user_id}>{memberLabel(member)}{member.user_id === userId ? ' (você)' : ''}</option>)}</select></label></div>
     <div className="form-two"><label>Categoria<select value={category} onChange={(event) => setCategory(event.target.value as ExpenseCategory)} disabled={busy}><option value="alimentacao">🍴 Alimentação</option><option value="hospedagem">🏡 Hospedagem</option><option value="transporte">🚗 Transporte</option><option value="atividades">🎟️ Atividades</option><option value="outros">✳ Outros</option></select></label><label>Data da despesa<input type="date" value={expenseDate} onChange={(event) => setExpenseDate(event.target.value)} required disabled={busy} /></label></div>
     <label>Forma de divisão<select value={splitMode} onChange={(event) => setSplitMode(event.target.value as SplitMode)} disabled={busy}><option value="equal">Igualmente</option><option value="percentage">Por porcentagem</option><option value="custom">Valores definidos por pessoa</option></select></label>
-    <fieldset className="participant-picker"><legend>Participantes</legend>{members.map((member) => <label key={member.user_id}><input type="checkbox" checked={participantIds.includes(member.user_id)} onChange={(event) => { const ids = event.target.checked ? [...participantIds, member.user_id] : participantIds.filter((id) => id !== member.user_id); setParticipantIds(ids); if (event.target.checked) { const equal = ids.length ? 100 / ids.length : 0; setPercentageInputs((current) => Object.fromEntries(ids.map((id) => [id, current[id] ?? String(equal)]))) } }} disabled={busy} /><span>{memberLabel(member)}{member.user_id === userId ? ' (você)' : ''}</span></label>)}</fieldset>
+    <fieldset className="participant-picker"><legend>Participantes</legend>{activeMembers.map((member) => <label key={member.user_id}><input type="checkbox" checked={participantIds.includes(member.user_id)} onChange={(event) => { const ids = event.target.checked ? [...participantIds, member.user_id] : participantIds.filter((id) => id !== member.user_id); setParticipantIds(ids); if (event.target.checked) { const equal = ids.length ? 100 / ids.length : 0; setPercentageInputs((current) => Object.fromEntries(ids.map((id) => [id, current[id] ?? String(equal)]))) } }} disabled={busy} /><span>{memberLabel(member)}{member.user_id === userId ? ' (você)' : ''}</span></label>)}</fieldset>
     {splitMode === 'percentage' && participantIds.map((id) => <label key={id}>{memberLabel(members.find((member) => member.user_id === id)!)} · porcentagem<input type="number" min="0" max="100" step="0.01" value={percentageInputs[id] ?? ''} onChange={(event) => setPercentageInputs((current) => ({ ...current, [id]: event.target.value }))} disabled={busy} /></label>)}
     {splitMode === 'percentage' && <small>Soma informada: {totalPercent.toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%. Deve fechar em 100%.</small>}
     {splitMode === 'custom' && participantIds.map((id) => <label key={id}>{memberLabel(members.find((member) => member.user_id === id)!)} · valor<div className="money-input"><span>R$</span><input inputMode="decimal" value={customInputs[id] ?? ''} onChange={(event) => setCustomInputs((current) => ({ ...current, [id]: event.target.value }))} disabled={busy} /></div></label>)}
@@ -478,7 +538,7 @@ function Expense({ client, groupId, groupName, userId, expense, onBack, onSaved 
     <label>Observações (opcional)<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={2000} rows={2} disabled={busy} /></label>
     {preview && !previewError && <div className="form-note"><strong>Prévia do rateio</strong>{preview.shares.map((share) => <div key={share.user_id}>{memberLabel(members.find((member) => member.user_id === share.user_id)!)}: {formatBrlCents(share.amount_cents)}</div>)}{preview.remainderCents > 0 && <p>Ajuste de {formatBrlCents(preview.remainderCents)} fica com quem pagou.</p>}<strong>Cronograma</strong>{installmentsPreview.map((part) => <div key={part.installment_number}>Parcela {part.installment_number}/{installmentsPreview.length}: {formatBrlCents(part.amount_cents)} · vence {new Date(`${part.due_date}T12:00:00`).toLocaleDateString('pt-BR')}</div>)}</div>}
     {previewError && <p className="auth-error" role="alert">{previewError}</p>}{error && <p className="auth-error" role="alert">{error}</p>}
-    <div className="form-actions"><button type="button" className="button button-light" onClick={onBack} disabled={busy}>Cancelar</button><button type="submit" className="button button-dark" disabled={busy || members.length === 0 || !preview || Boolean(previewError)}>{busy ? 'Salvando…' : expense ? 'Salvar alterações' : 'Salvar despesa'} <span>→</span></button></div>
+    <div className="form-actions"><button type="button" className="button button-light" onClick={onBack} disabled={busy}>Cancelar</button><button type="submit" className="button button-dark" disabled={busy || activeMembers.length === 0 || !preview || Boolean(previewError) || includesFormerParticipant}>{busy ? 'Salvando…' : expense ? 'Salvar alterações' : 'Salvar despesa'} <span>→</span></button></div>
   </form>}</section>
 }
 
@@ -520,6 +580,19 @@ function PasswordSetup({ onSubmit, onSignOut, busy, error }: {
   }
 
   return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><span className="brand-mark">s<span>.</span></span><span>split<span className="brand-accent">uai</span></span></div><div className="eyebrow">CONVITE ACEITO</div><h1>Crie sua senha<span className="heading-dot">.</span></h1><p className="form-intro">Defina uma senha para entrar no SplitUai.</p><form onSubmit={submit}><label>Nova senha<input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={6} required disabled={busy} /></label><label>Confirme a senha<input type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={6} required disabled={busy} /></label><button className="button button-dark full-button" type="submit" disabled={busy}>{busy ? 'Salvando…' : 'Salvar senha'} <span>→</span></button>{(validationError || error) && <p className="auth-error" role="alert">{validationError ?? error}</p>}<button className="text-button auth-signout" type="button" onClick={() => void onSignOut()} disabled={busy}>Sair</button></form></section>
+}
+
+function MyInvitations({ invitations, onRefresh, onAccept }: { invitations: MyGroupInvitation[]; onRefresh: () => void; onAccept: (id: string) => Promise<void> }) {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  async function accept(id: string) {
+    setBusy(true); setError(null); setNotice(null)
+    try { await onAccept(id); setNotice('Convite aceito. O grupo já está disponível em Meus grupos.') }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível aceitar este convite. Confira se ele ainda está válido e foi enviado para seu e-mail.') }
+    finally { setBusy(false) }
+  }
+  return <section className="page-wrap"><div className="eyebrow">ESPAÇO PESSOAL</div><h1>Convites recebidos<span className="heading-dot">.</span></h1><p className="form-intro">Convites enviados ao e-mail da sua conta.</p>{error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}{invitations.length === 0 ? <div className="empty-expenses"><strong>Nenhum convite pendente.</strong><p>Quando alguém convidar o e-mail desta conta, ele aparecerá aqui.</p><button className="text-button" onClick={onRefresh}>Atualizar</button></div> : <div className="invitation-list">{invitations.map((invitation) => { const expired = invitation.status === 'expired' || new Date(invitation.expires_at) <= new Date(); return <div className="invitation-row" key={invitation.id}><div><strong>{invitation.group_name}</strong><small>{invitation.invited_email} · válido até {new Date(invitation.expires_at).toLocaleDateString('pt-BR')}</small></div><span className={`invite-status status-${expired ? 'expired' : invitation.status}`}>{expired ? 'Expirado' : 'Pendente'}</span><button className="button button-dark" disabled={busy || expired} onClick={() => void accept(invitation.id)}>{busy ? 'Aceitando…' : 'Aceitar convite'}</button></div> })}</div>}</section>
 }
 
 function Account({ client, email, userId, onSignOut, busy }: { client: NonNullable<typeof supabase>; email: string; userId: string; onSignOut: () => Promise<void>; busy: boolean }) {

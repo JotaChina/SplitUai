@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-export type ExpenseCategory = 'hospedagem' | 'alimentacao' | 'transporte' | 'corrida' | 'atividades' | 'outros'
+export type ExpenseCategory = 'hospedagem' | 'alimentacao' | 'transporte' | 'corrida' | 'atividades' | 'outros' | 'aluguel' | 'luz' | 'agua' | 'iptu'
 export type SplitMode = 'equal' | 'percentage' | 'custom'
 export type ExpenseShare = { user_id: string; amount_cents: number; percentage?: number | null }
 export type ExpenseInstallment = {

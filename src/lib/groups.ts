@@ -39,6 +39,7 @@ export type GroupProfileRecord = {
   display_name: string | null
   username: string | null
   avatar_url: string | null
+  pix_key?: string | null
 }
 
 export type GroupInvitationRecord = {
@@ -159,14 +160,14 @@ export async function getGroupMembers(client: SupabaseClient, groupId: string) {
     const fallback = await client.from('profiles').select('id, display_name, username').in('id', members.map((member) => member.user_id))
     if (fallback.error) throw fallback.error
     const profiles = new Map(((fallback.data ?? []) as GroupProfileRecord[]).map((profile) => [profile.id, profile]))
-    return members.map((member) => ({ ...member, display_name: member.display_name ?? profiles.get(member.user_id)?.display_name ?? null, username: profiles.get(member.user_id)?.username ?? null, avatar_url: null }))
+    return members.map((member) => ({ ...member, display_name: profiles.get(member.user_id)?.display_name ?? null, username: profiles.get(member.user_id)?.username ?? null, avatar_url: null }))
   }
   if (profileError) throw profileError
   const profiles = new Map(((profileRows ?? []) as GroupProfileRecord[]).map((profile) => [profile.id, profile]))
 
   return members.map((member) => ({
     ...member,
-    display_name: member.display_name ?? profiles.get(member.user_id)?.display_name ?? null,
+    display_name: profiles.get(member.user_id)?.display_name ?? null,
     username: profiles.get(member.user_id)?.username ?? null,
     avatar_url: profiles.get(member.user_id)?.avatar_url ?? null,
   }))
@@ -234,8 +235,24 @@ export async function sendGroupInvitationEmail(client: SupabaseClient, groupId: 
   }
 }
 
-export async function updateGroupMember(client: SupabaseClient, groupId: string, userId: string, role: 'admin' | 'member', displayName: string | null) {
-  const { error } = await client.rpc('update_group_member', { p_group_id: groupId, p_user_id: userId, p_role: role, p_display_name: displayName })
+export async function getProfile(client: SupabaseClient, userId: string) {
+  const { data, error } = await client.from('profiles')
+    .select('id, display_name, username, avatar_url, pix_key')
+    .eq('id', userId)
+    .maybeSingle()
+  if (error) throw error
+  return data as GroupProfileRecord | null
+}
+
+export async function setMyPixKey(client: SupabaseClient, userId: string, pixKey: string) {
+  const { error } = await client.from('profiles')
+    .update({ pix_key: pixKey.trim() || null })
+    .eq('id', userId)
+  if (error) throw error
+}
+
+export async function updateGroupMember(client: SupabaseClient, groupId: string, userId: string, role: 'admin' | 'member') {
+  const { error } = await client.rpc('update_group_member', { p_group_id: groupId, p_user_id: userId, p_role: role })
   if (error) throw error
 }
 

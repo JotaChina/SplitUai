@@ -17,11 +17,14 @@ import {
   updateGroup,
   setGroupArchived,
   setMyUsername,
+  getProfile,
+  setMyPixKey,
   uploadImage,
   imageColumnsMissing,
   type GroupInvitationRecord,
   type GroupMemberView,
   type GroupRecord,
+  type GroupProfileRecord,
   type MyGroupInvitation,
 } from './lib/groups'
 import {
@@ -47,7 +50,12 @@ import {
 } from './lib/expenses'
 import { parseSplitwiseCsv, type SplitwiseCsvPreview } from './lib/splitwiseCsv'
 
-type Page = 'groups' | 'group' | 'new-group' | 'expense' | 'account' | 'invitations'
+type Page = 'groups' | 'group' | 'new-group' | 'expense' | 'account' | 'invitations' | 'profile'
+type ChartCategory = ExpenseCategory | 'contas_da_casa'
+const houseBillCategories: ExpenseCategory[] = ['aluguel', 'luz', 'agua', 'iptu']
+const categoryLabels: Record<ExpenseCategory, string> = { alimentacao: 'Alimentação', hospedagem: 'Hospedagem', transporte: 'Transporte', corrida: 'Corrida', atividades: 'Atividades', outros: 'Outros', aluguel: 'Aluguel', luz: 'Luz', agua: 'Água', iptu: 'IPTU' }
+const categoryEmojis: Record<ExpenseCategory, string> = { alimentacao: '🍴', hospedagem: '🏡', transporte: '🚗', corrida: '🍁', atividades: '🎟️', outros: '✳', aluguel: '🏠', luz: '💡', agua: '💧', iptu: '🏛️' }
+const chartCategoryLabels: Record<ChartCategory, string> = { ...categoryLabels, contas_da_casa: 'Contas da Casa' }
 const settlementPaymentLabels: Record<SettlementPaymentMethod, string> = {
   pix: 'Pix', dinheiro: 'Dinheiro', transferencia: 'Transferência bancária', cartao: 'Cartão', outro: 'Outro', splitwise: 'Importado do Splitwise',
 }
@@ -91,6 +99,7 @@ function App() {
   const [groupsLoading, setGroupsLoading] = useState(false)
   const [groupsError, setGroupsError] = useState<string | null>(null)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
+  const [profileUserId, setProfileUserId] = useState<string | null>(null)
   const [editingExpense, setEditingExpense] = useState<ExpenseRecord | null>(null)
   const [myInvitations, setMyInvitations] = useState<MyGroupInvitation[]>([])
 
@@ -235,14 +244,15 @@ function App() {
       </aside>
 
       <main className="main-content">
-        <header className="topbar"><div className="breadcrumb">Espaço pessoal <span>/</span> <strong>{page === 'account' ? 'Minha conta' : page === 'expense' ? 'Nova despesa' : page === 'group' ? groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo' : page === 'new-group' ? 'Novo grupo' : 'Meus grupos'}</strong></div><div className="topbar-account"><button className="sign-out-button" onClick={() => void signOut()} disabled={authBusy}>Sair</button></div></header>
+        <header className="topbar"><div className="breadcrumb">Espaço pessoal <span>/</span> <strong>{page === 'account' ? 'Minha conta' : page === 'expense' ? 'Nova despesa' : page === 'profile' ? 'Perfil' : page === 'group' ? groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo' : page === 'new-group' ? 'Novo grupo' : 'Meus grupos'}</strong></div><div className="topbar-account"><button className="sign-out-button" onClick={() => void signOut()} disabled={authBusy}>Sair</button></div></header>
 
         {page === 'groups' && <Groups groups={groups} loading={groupsLoading} error={groupsError} onRefresh={() => void refreshGroups()} onOpen={(id) => { setSelectedGroupId(id); setPage('group') }} onCreate={() => setPage('new-group')} />}
         {page === 'new-group' && <NewGroup onBack={() => setPage('groups')} onCreate={saveNewGroup} />}
-        {page === 'group' && selectedGroupId && supabase && <Group key={selectedGroupId} client={supabase} groupId={selectedGroupId} userId={session.user.id} onBack={() => { void refreshGroups(); setPage('groups') }} onAddExpense={() => { setEditingExpense(null); setPage('expense') }} onEditExpense={(expense) => { setEditingExpense(expense); setPage('expense') }} />}
+        {page === 'group' && selectedGroupId && supabase && <Group key={selectedGroupId} client={supabase} groupId={selectedGroupId} userId={session.user.id} onBack={() => { void refreshGroups(); setPage('groups') }} onAddExpense={() => { setEditingExpense(null); setPage('expense') }} onEditExpense={(expense) => { setEditingExpense(expense); setPage('expense') }} onOpenProfile={(id) => { setProfileUserId(id); setPage('profile') }} />}
         {page === 'group' && !selectedGroupId && <Groups groups={groups} loading={groupsLoading} error={groupsError} onRefresh={() => void refreshGroups()} onOpen={(id) => { setSelectedGroupId(id); setPage('group') }} onCreate={() => setPage('new-group')} />}
         {page === 'expense' && selectedGroupId && supabase && <Expense client={supabase} groupId={selectedGroupId} groupName={groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo'} userId={session.user.id} expense={editingExpense} onBack={() => { setEditingExpense(null); setPage('group') }} onSaved={() => { setEditingExpense(null); setPage('group') }} />}
         {page === 'account' && supabase && <Account client={supabase} email={session.user.email ?? ''} userId={session.user.id} onSignOut={signOut} busy={authBusy} />}
+        {page === 'profile' && supabase && profileUserId && <UserProfile client={supabase} userId={profileUserId} viewerId={session.user.id} onBack={() => setPage(selectedGroupId ? 'group' : 'groups')} onOpenGroup={(id) => { setSelectedGroupId(id); setPage('group') }} />}
         {page === 'invitations' && <MyInvitations invitations={myInvitations} onRefresh={() => void refreshMyInvitations()} onAccept={acceptMyInvitation} />}
       </main>
     </div>
@@ -294,7 +304,7 @@ function NewGroup({ onBack, onCreate }: { onBack: () => void; onCreate: (values:
   return <section className="page-wrap form-wrap"><button className="back-link" onClick={onBack}>← Voltar aos grupos</button><div className="eyebrow">NOVO ESPAÇO COMPARTILHADO</div><h1>Criar grupo<span className="heading-dot">.</span></h1><p className="form-intro">Você será o administrador inicial do grupo.</p><form onSubmit={(event) => void submit(event)}><label>Nome do grupo<input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} required placeholder="Ex.: Fim de semana em Floripa" disabled={busy} /></label><label>Descrição (opcional)<textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1000} rows={4} placeholder="Um pouco sobre este grupo" disabled={busy} /></label>{error && <p className="auth-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="button button-light" onClick={onBack} disabled={busy}>Cancelar</button><button type="submit" className="button button-dark" disabled={busy || !name.trim()}>{busy ? 'Criando…' : 'Criar grupo'} <span>→</span></button></div></form></section>
 }
 
-function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense }: { client: NonNullable<typeof supabase>; groupId: string; userId: string; onBack: () => void; onAddExpense: () => void; onEditExpense: (expense: ExpenseRecord) => void }) {
+function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense, onOpenProfile }: { client: NonNullable<typeof supabase>; groupId: string; userId: string; onBack: () => void; onAddExpense: () => void; onEditExpense: (expense: ExpenseRecord) => void; onOpenProfile: (id: string) => void }) {
   const [group, setGroup] = useState<GroupRecord | null>(null)
   const [members, setMembers] = useState<GroupMemberView[]>([])
   const [invitations, setInvitations] = useState<GroupInvitationRecord[]>([])
@@ -319,7 +329,8 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense }:
   const [splitwisePreview, setSplitwisePreview] = useState<SplitwiseCsvPreview | null>(null)
   const [splitwiseFileName, setSplitwiseFileName] = useState('')
   const [splitwiseMappings, setSplitwiseMappings] = useState<Record<string, string>>({})
-  const [categoryFilter, setCategoryFilter] = useState<ExpenseCategory | 'all'>('all')
+  const [adminView, setAdminView] = useState(false)
+  const [categoryFilter, setCategoryFilter] = useState<ExpenseCategory | 'contas_da_casa' | 'all'>('all')
   const [chartType, setChartType] = useState<'bars' | 'donut' | 'trend'>('bars')
   const initialToday = new Date()
   const initialDateValue = toDateInputValue(initialToday)
@@ -344,11 +355,14 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense }:
     ? toDateInputValue(new Date(Number(reportMonth.slice(0, 4)), Number(reportMonth.slice(5, 7)), 0)) : reportPeriod === 'month' ? '' : reportPeriod === 'custom' ? rangeEnd : expenseDates[expenseDates.length - 1] ?? initialDateValue
   const validReportRange = Boolean(periodStart && periodEnd && periodStart <= periodEnd)
   const reportExpenses = validReportRange ? groupExpenses.filter((expense) => expense.expense_date >= periodStart && expense.expense_date <= periodEnd) : []
-  const categoryTotals = (['alimentacao','hospedagem','transporte','corrida','atividades','outros'] as ExpenseCategory[]).map((category) => ({
-    category,
-    all: reportExpenses.filter((expense) => expense.category === category).reduce((sum, expense) => sum + expense.amount_cents, 0),
-  }))
-  const visibleExpenses = categoryFilter === 'all' ? groupExpenses : groupExpenses.filter((expense) => expense.category === categoryFilter)
+  const categoryTotals: { category: ChartCategory; all: number }[] = [
+    ...(['alimentacao','hospedagem','transporte','corrida','atividades','outros'] as ExpenseCategory[]).map((category) => ({
+      category,
+      all: reportExpenses.filter((expense) => expense.category === category).reduce((sum, expense) => sum + expense.amount_cents, 0),
+    })),
+    { category: 'contas_da_casa', all: reportExpenses.filter((expense) => houseBillCategories.includes(expense.category)).reduce((sum, expense) => sum + expense.amount_cents, 0) },
+  ]
+  const visibleExpenses = categoryFilter === 'all' ? groupExpenses : groupExpenses.filter((expense) => categoryFilter === 'contas_da_casa' ? houseBillCategories.includes(expense.category) : expense.category === categoryFilter)
   const expenseMonthGroups = [...new Set(visibleExpenses.map((expense) => expense.expense_date.slice(0, 7)))].sort((a, b) => b.localeCompare(a)).map((month) => {
     const expenses = visibleExpenses.filter((expense) => expense.expense_date.startsWith(month))
     return { month, expenses, total: expenses.reduce((sum, expense) => sum + expense.amount_cents, 0) }
@@ -446,7 +460,7 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense }:
 
   async function memberRole(member: GroupMemberView, role: 'admin' | 'member') {
     setBusy(true); setError(null)
-    try { await updateGroupMember(client, groupId, member.user_id, role, member.display_name); setMembers(await getGroupMembers(client, groupId)) }
+    try { await updateGroupMember(client, groupId, member.user_id, role); setMembers(await getGroupMembers(client, groupId)) }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível alterar o papel.') }
     finally { setBusy(false) }
   }
@@ -456,13 +470,6 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense }:
     setBusy(true); setError(null)
     try { await removeGroupMember(client, groupId, member.user_id); setMembers(await getGroupMembers(client, groupId)) }
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível remover o participante.') }
-    finally { setBusy(false) }
-  }
-
-  async function memberName(member: GroupMemberView, displayName: string) {
-    setBusy(true); setError(null)
-    try { await updateGroupMember(client, groupId, member.user_id, member.role, displayName || null); setMembers(await getGroupMembers(client, groupId)) }
-    catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível editar os dados do participante.') }
     finally { setBusy(false) }
   }
 
@@ -570,39 +577,35 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense }:
     const member = members.find((item) => item.user_id === userId)
     return member?.username ? `@${member.username}` : member?.display_name || 'Sem identificador'
   }
-  const renderBalances = (rows: typeof allBalances) => <div className="balance-list">{rows.map((balance) => <div className="balance-row" key={balance.user_id}><span>{memberLabel(balance.user_id)}</span><strong className={balance.balance_cents > 0 ? 'balance-positive' : balance.balance_cents < 0 ? 'balance-negative' : ''}>{balance.balance_cents > 0 ? 'Recebe ' : balance.balance_cents < 0 ? 'Deve ' : ''}{formatBrlCents(Math.abs(balance.balance_cents))}</strong></div>)}</div>
-  const categoryLabels: Record<ExpenseCategory, string> = { alimentacao: 'Alimentação', hospedagem: 'Hospedagem', transporte: 'Transporte', corrida: 'Corrida', atividades: 'Atividades', outros: 'Outros' }
-  const categoryEmojis: Record<ExpenseCategory, string> = { alimentacao: '🍴', hospedagem: '🏡', transporte: '🚗', corrida: '🍁', atividades: '🎟️', outros: '✳' }
+  const memberLink = (id: string) => <button className="profile-link" onClick={() => onOpenProfile(id)} title="Abrir perfil">{memberLabel(id)}</button>
+  const renderBalances = (rows: typeof allBalances) => <div className="balance-list">{rows.map((balance) => <div className="balance-row" key={balance.user_id}><span>{memberLink(balance.user_id)}</span><strong className={balance.balance_cents > 0 ? 'balance-positive' : balance.balance_cents < 0 ? 'balance-negative' : ''}>{balance.balance_cents > 0 ? 'Recebe ' : balance.balance_cents < 0 ? 'Deve ' : ''}{formatBrlCents(Math.abs(balance.balance_cents))}</strong></div>)}</div>
   const installmentStatus = (dueDate: string) => {
     const now = new Date()
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
     return dueDate < today ? 'Vencimento passado' : 'A vencer'
   }
   const renderExpenseRow = (expense: ExpenseRecord) => {
-    const payer = memberLabel(expense.paid_by)
     const schedule = expense.installments.map((part) => `${formatBrlCents(part.amount_cents)} em ${new Date(`${part.due_date}T12:00:00`).toLocaleDateString('pt-BR')} (${installmentStatus(part.due_date)})`).join(' · ')
     return <div className="expense-row" key={expense.id}>
       <span className={`expense-icon category-${expense.category}`}>{categoryEmojis[expense.category]}</span>
-      {isAdmin
-        ? <button className="expense-name expense-open" onClick={() => onEditExpense(expense)}><strong>{expense.description}</strong><small>{payer} pagou · {categoryLabels[expense.category]} · {expense.installments.length}x · {schedule}</small></button>
-        : <div className="expense-name"><strong>{expense.description}</strong><small>{payer} pagou · {categoryLabels[expense.category]} · {expense.installments.length}x · {schedule}</small></div>}
+      <div className="expense-name">{isAdmin ? <button className="expense-title-button" onClick={() => onEditExpense(expense)}>{expense.description}</button> : <strong>{expense.description}</strong>}<small>{memberLink(expense.paid_by)} pagou · {categoryLabels[expense.category]} · {expense.installments.length}x · {schedule}</small></div>
       <strong className="expense-amount">{formatBrlCents(expense.amount_cents)}</strong>
       {expense.rounding_remainder_cents > 0 && <small>Ajuste {formatBrlCents(expense.rounding_remainder_cents)} fica com quem pagou</small>}
       {isAdmin && <><button className="expense-edit" aria-label={`Editar ${expense.description}`} onClick={() => onEditExpense(expense)}>Editar</button><button className="expense-delete" aria-label={`Excluir ${expense.description}`} onClick={() => void removeExpense(expense)}>×</button></>}
     </div>
   }
-  return <section className="page-wrap"><button className="back-link" onClick={onBack}>← Voltar aos grupos</button><div className="detail-hero" style={group.cover_url ? { backgroundImage: `linear-gradient(90deg,rgba(18,28,17,.78),rgba(18,28,17,.2)),url("${group.cover_url}")`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}><div><div className="eyebrow">{group.archived_at ? 'GRUPO ARQUIVADO' : 'GRUPO'} · CRIADO EM {new Date(group.created_at).toLocaleDateString('pt-BR')}</div>{editing ? <form className="group-edit-form" onSubmit={(event) => void saveDetails(event)}><label>Nome<input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} required /></label><label>Descrição<textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1000} rows={2} /></label><div className="group-image-fields"><label>Foto do ícone<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setIconFile(event.target.files?.[0] ?? null)} /></label><label>Foto de capa<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setCoverFile(event.target.files?.[0] ?? null)} /></label></div><small>JPG, PNG ou WebP · até 5 MB por imagem.</small><div className="form-actions"><button type="button" className="button button-light" onClick={() => { setName(group.name); setDescription(group.description ?? ''); setIconFile(null); setCoverFile(null); setEditing(false) }}>Cancelar</button><button className="button button-dark" disabled={busy}>{busy ? 'Salvando…' : 'Salvar'}</button></div></form> : <><div className="group-hero-title">{group.icon_url && <img className="group-icon-large" src={group.icon_url} alt="" />}<h1>{group.name}<span className="heading-dot">.</span></h1></div><p>{group.description || 'Organize as despesas com seus participantes.'}</p>{isAdmin && <button className="text-button" onClick={() => setEditing(true)}>Editar informações</button>}</>}<div className="detail-people"><span>{members.length} {members.length === 1 ? 'participante' : 'participantes'} · Seu papel: {isAdmin ? 'admin' : 'membro'}</span></div><div className="heading-actions"><button className="button button-light" onClick={() => void archiveGroup()} disabled={busy}>{group.archived_at ? 'Restaurar grupo' : 'Arquivar grupo'}</button>{canDeleteGroup && <button className="button button-light" onClick={() => void permanentlyDeleteGroup()} disabled={busy}>Excluir grupo</button>}</div>{groupExpenses.length > 0 && <small>Grupos com despesas podem ser arquivados; o histórico não pode ser apagado.</small>}</div>{!group.cover_url && <div className="detail-illustration">✳</div>}</div>{error && <p className="auth-error" role="alert">{error}</p>}
-    <div className="section-title"><div><h2>Participantes</h2><p>Participantes removidos continuam no histórico das despesas e dos saldos.</p></div></div><div className="member-list">{members.map((member) => <div className="member-row" key={member.user_id}>{member.avatar_url ? <img className="avatar avatar-photo" src={member.avatar_url} alt="" /> : <span className="avatar avatar-you">{(member.username?.[0] ?? member.display_name?.[0] ?? 'P').toUpperCase()}</span>}<span className="member-name">{member.username ? `@${member.username}` : member.display_name || 'Sem identificador'}{!member.active && <small> · Acesso encerrado</small>}</span><span className="role-badge">{member.role === 'admin' ? 'Administrador' : 'Membro'}</span>{isAdmin && member.active && member.user_id !== userId && <><input className="member-label-input" aria-label={`Nome neste grupo para ${member.username ?? member.display_name ?? 'participante'}`} placeholder="Nome neste grupo" defaultValue={member.display_name ?? ''} maxLength={80} disabled={busy} onBlur={(event) => { if (event.target.value !== (member.display_name ?? '')) void memberName(member, event.target.value.trim()) }} /><select aria-label={`Papel de ${member.username ?? member.display_name ?? 'participante'}`} value={member.role} disabled={busy} onChange={(event) => void memberRole(member, event.target.value as 'admin' | 'member')}><option value="member">Membro</option><option value="admin">Administrador</option></select><button className="text-button" disabled={busy} onClick={() => void memberRemove(member)}>Remover</button></>}</div>)}</div>
+  return <section className="page-wrap"><button className="back-link" onClick={onBack}>← Voltar aos grupos</button><div className="detail-hero" style={group.cover_url ? { backgroundImage: `linear-gradient(90deg,rgba(18,28,17,.78),rgba(18,28,17,.2)),url("${group.cover_url}")`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}><div><div className="eyebrow">{group.archived_at ? 'GRUPO ARQUIVADO' : 'GRUPO'} · CRIADO EM {new Date(group.created_at).toLocaleDateString('pt-BR')}</div>{editing ? <form className="group-edit-form" onSubmit={(event) => void saveDetails(event)}><label>Nome<input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} required /></label><label>Descrição<textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1000} rows={2} /></label><div className="group-image-fields"><label>Foto do ícone<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setIconFile(event.target.files?.[0] ?? null)} /></label><label>Foto de capa<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setCoverFile(event.target.files?.[0] ?? null)} /></label></div><small>JPG, PNG ou WebP · até 5 MB por imagem.</small><div className="form-actions"><button type="button" className="button button-light" onClick={() => { setName(group.name); setDescription(group.description ?? ''); setIconFile(null); setCoverFile(null); setEditing(false) }}>Cancelar</button><button className="button button-dark" disabled={busy}>{busy ? 'Salvando…' : 'Salvar'}</button></div></form> : <><div className="group-hero-title">{group.icon_url && <img className="group-icon-large" src={group.icon_url} alt="" />}<h1>{group.name}<span className="heading-dot">.</span></h1></div><p>{group.description || 'Organize as despesas com seus participantes.'}</p>{isAdmin && <button className="text-button" onClick={() => setEditing(true)}>Editar informações</button>}</>}<div className="detail-people"><span>{members.length} {members.length === 1 ? 'participante' : 'participantes'} · Seu papel: {isAdmin ? 'admin' : 'membro'}</span></div><div className="heading-actions">{isAdmin && <button className="button button-light" aria-pressed={adminView} onClick={() => setAdminView((value) => !value)}>{adminView ? 'Visão comum' : 'Visão de admin'}</button>}<button className="button button-light" onClick={() => void archiveGroup()} disabled={busy}>{group.archived_at ? 'Restaurar grupo' : 'Arquivar grupo'}</button>{canDeleteGroup && <button className="button button-light" onClick={() => void permanentlyDeleteGroup()} disabled={busy}>Excluir grupo</button>}</div>{groupExpenses.length > 0 && <small>Grupos com despesas podem ser arquivados; o histórico não pode ser apagado.</small>}</div>{!group.cover_url && <div className="detail-illustration">✳</div>}</div>{error && <p className="auth-error" role="alert">{error}</p>}
+    <div className="section-title"><div><h2>Participantes</h2><p>Abra um perfil pelo nome. Participantes removidos continuam no histórico do grupo.</p></div></div><div className="member-list">{members.map((member) => <div className="member-row" key={member.user_id}>{member.avatar_url ? <img className="avatar avatar-photo" src={member.avatar_url} alt="" /> : <span className="avatar avatar-you">{(member.username?.[0] ?? member.display_name?.[0] ?? 'P').toUpperCase()}</span>}<button className="member-name-button" onClick={() => onOpenProfile(member.user_id)} title="Abrir perfil">{member.username ? `@${member.username}` : member.display_name || 'Sem identificador'}{!member.active && <small> · Acesso encerrado</small>}</button><span className="role-badge">{member.role === 'admin' ? 'Administrador' : 'Membro'}</span>{isAdmin && member.active && member.user_id !== userId && <><select aria-label={`Papel de ${member.username ?? member.display_name ?? 'participante'}`} value={member.role} disabled={busy} onChange={(event) => void memberRole(member, event.target.value as 'admin' | 'member')}><option value="member">Membro</option><option value="admin">Administrador</option></select><button className="text-button" disabled={busy} onClick={() => void memberRemove(member)}>Remover</button></>}</div>)}</div>
     {isAdmin && <><div className="section-title"><div><h2>Convites</h2><p>Envie e acompanhe convites para este grupo.</p></div></div><div className="invite-panel"><form className="invite-form" onSubmit={(event) => void invite(event)}><label>E-mail da pessoa<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required placeholder="pessoa@email.com" disabled={busy} /></label><button className="button button-dark" disabled={busy}>{busy ? 'Enviando…' : 'Criar e enviar'}</button></form><p className="invite-help">A pessoa receberá um link seguro para entrar. Contas existentes recebem link de acesso; contas novas recebem convite para criar a senha. O aceite do grupo acontece depois que a pessoa entra e confirma o convite.</p>{error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}{invitations.length > 0 && <div className="invitation-list">{invitations.map((invitation) => { const expired = ['pending','sent'].includes(invitation.status) && new Date(invitation.expires_at) <= new Date(); const status = expired ? 'expired' : invitation.status; return <div className="invitation-row" key={invitation.id}><div><strong>{invitation.invited_email}</strong><small>Expira em {new Date(invitation.expires_at).toLocaleDateString('pt-BR')}</small></div><span className={`invite-status status-${status}`}>{status === 'pending' ? 'Pendente' : status === 'sent' ? 'Enviado' : status === 'accepted' ? 'Aceito' : status === 'cancelled' ? 'Cancelado' : 'Expirado'}</span>{isAdmin && ['pending','sent'].includes(invitation.status) && !expired && <><button className="text-button" disabled={busy} onClick={() => void invitationAction(invitation,'send')}>{invitation.status === 'sent' ? 'Reenviar' : 'Enviar'}</button><button className="text-button" disabled={busy} onClick={() => void invitationAction(invitation,'cancel')}>Cancelar</button></>}</div> })}</div>}</div></>}
-    {isAdmin && <section className="settlement-panel splitwise-import"><div><h3>Importar histórico do Splitwise</h3><p>Despesas entram como despesas e pagamentos entram como acertos, separados dos gráficos. Reimportar o mesmo arquivo não duplica os registros.</p></div><label>Arquivo CSV<input type="file" accept=".csv,text/csv" disabled={busy} onChange={(event) => void chooseSplitwiseFile(event.target.files?.[0])} /></label>{splitwisePreview && <><strong>{splitwiseFileName}: {splitwisePreview.expenses.length} despesas · {splitwisePreview.settlements.length} acertos · {splitwisePreview.skipped.length} linhas ignoradas</strong><div className="splitwise-mappings">{splitwisePreview.memberNames.map((person) => <label key={person}>{person}<select value={splitwiseMappings[person] ?? ''} onChange={(event) => setSplitwiseMappings((current) => ({ ...current, [person]: event.target.value }))}><option value="">Selecione participante</option>{members.map((member) => <option key={member.user_id} value={member.user_id}>{member.username ? `@${member.username}` : member.display_name || 'Sem identificador'}{!member.active ? ' (acesso encerrado)' : ''}</option>)}</select></label>)}</div>{splitwisePreview.skipped.length > 0 && <details><summary>Ver linhas ignoradas</summary><ul>{splitwisePreview.skipped.map((row) => <li key={row.row}>Linha {row.row} · {row.description}: {row.reason}</li>)}</ul></details>}<div className="form-actions"><button className="button button-light" disabled={busy} onClick={() => setSplitwisePreview(null)}>Cancelar</button><button className="button button-dark" disabled={busy || splitwisePreview.expenses.length + splitwisePreview.settlements.length === 0} onClick={() => void importSplitwise()}>{busy ? 'Importando…' : 'Importar histórico'}</button></div></>}</section>}
+    {isAdmin && adminView && <section className="settlement-panel splitwise-import admin-tools"><div><div className="eyebrow">VISÃO DE ADMIN</div><h3>Importar histórico do Splitwise</h3><p>Despesas entram como despesas e pagamentos entram como acertos, separados dos gráficos. Reimportar o mesmo arquivo não duplica os registros.</p></div><label>Arquivo CSV<input type="file" accept=".csv,text/csv" disabled={busy} onChange={(event) => void chooseSplitwiseFile(event.target.files?.[0])} /></label>{splitwisePreview && <><strong>{splitwiseFileName}: {splitwisePreview.expenses.length} despesas · {splitwisePreview.settlements.length} acertos · {splitwisePreview.skipped.length} linhas ignoradas</strong><div className="splitwise-mappings">{splitwisePreview.memberNames.map((person) => <label key={person}>{person}<select value={splitwiseMappings[person] ?? ''} onChange={(event) => setSplitwiseMappings((current) => ({ ...current, [person]: event.target.value }))}><option value="">Selecione participante</option>{members.map((member) => <option key={member.user_id} value={member.user_id}>{member.username ? `@${member.username}` : member.display_name || 'Sem identificador'}{!member.active ? ' (acesso encerrado)' : ''}</option>)}</select></label>)}</div>{splitwisePreview.skipped.length > 0 && <details><summary>Ver linhas ignoradas</summary><ul>{splitwisePreview.skipped.map((row) => <li key={row.row}>Linha {row.row} · {row.description}: {row.reason}</li>)}</ul></details>}<div className="form-actions"><button className="button button-light" disabled={busy} onClick={() => setSplitwisePreview(null)}>Cancelar</button><button className="button button-dark" disabled={busy || splitwisePreview.expenses.length + splitwisePreview.settlements.length === 0} onClick={() => void importSplitwise()}>{busy ? 'Importando…' : 'Importar histórico'}</button></div></>}</section>}
     <div className="detail-stats"><div><small>DESPESAS DO GRUPO</small><strong>{groupExpenses.length}</strong></div><div><small>PARTICIPANTES</small><strong>{members.length}</strong></div><div><small>VALOR DEVEDOR TOTAL</small><strong>{formatBrlCents(allTimeDebtTotal)}</strong></div><button className="button button-dark" onClick={onAddExpense}><span>＋</span> Nova despesa</button></div>
     <div className="section-title detail-section-title"><div><h2>Saldos em paralelo</h2><p>O saldo do mês considera apenas parcelas e acertos com data neste mês. O saldo total reúne todo o histórico.</p></div></div>
     <div className="balance-columns"><section className="settlement-panel"><h3>Saldo do mês · {new Date(`${currentMonth}-01T12:00:00`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}</h3>{renderBalances(monthBalances)}<strong>Total devedor do mês: {formatBrlCents(monthDebtTotal)}</strong><small className="balance-period-note">{currentUserBalanceOutsideMonth === 0 ? 'Seu saldo dos demais períodos está zerado.' : `Nos demais períodos, ${currentUserBalanceOutsideMonth < 0 ? 'você deve' : 'você recebe'} ${formatBrlCents(Math.abs(currentUserBalanceOutsideMonth))}.`}</small></section><section className="settlement-panel"><h3>Saldo de todo o período</h3>{renderBalances(allBalances)}<strong>Falta acertar: {formatBrlCents(allTimeDebtTotal)}</strong></section></div>
-    <div className="settlement-panel"><div className="settlement-panel-heading"><h3>Sugestões de acerto · todo o período</h3><button className="button button-dark" type="button" onClick={() => { setSettlementFormOpen((open) => !open); setError(null); setSettlementNotice(null) }}>{settlementFormOpen ? 'Cancelar acerto' : '＋ Acertar contas'}</button></div>{settlements.length ? <div className="settlement-list">{settlements.map((item, index) => <div className="balance-row" key={`${item.from_user_id}-${item.to_user_id}-${index}`}><span>{memberLabel(item.from_user_id)} paga para {memberLabel(item.to_user_id)}</span><strong>{formatBrlCents(item.amount_cents)}</strong></div>)}</div> : <p>Todos estão em dia. Não há transferências sugeridas.</p>}<small>As sugestões mostram valores para quitar o saldo. Você também pode registrar pagamentos parciais.</small>
+    <div className="settlement-panel"><div className="settlement-panel-heading"><h3>Sugestões de acerto · todo o período</h3><button className="button button-dark" type="button" onClick={() => { setSettlementFormOpen((open) => !open); setError(null); setSettlementNotice(null) }}>{settlementFormOpen ? 'Cancelar acerto' : '＋ Acertar contas'}</button></div>{settlements.length ? <div className="settlement-list">{settlements.map((item, index) => <div className="balance-row" key={`${item.from_user_id}-${item.to_user_id}-${index}`}><span>{memberLink(item.from_user_id)} paga para {memberLink(item.to_user_id)}</span><strong>{formatBrlCents(item.amount_cents)}</strong></div>)}</div> : <p>Todos estão em dia. Não há transferências sugeridas.</p>}<small>As sugestões mostram valores para quitar o saldo. Você também pode registrar pagamentos parciais.</small>
       {settlementFormOpen && <form className="settlement-form" onSubmit={(event) => void saveSettlement(event)}><p>Registre um pagamento feito por você. O valor pode ser parcial e não precisa quitar toda a dívida.</p><div className="settlement-form-fields"><label>Quem recebeu?<select required value={settlementRecipient} onChange={(event) => setSettlementRecipient(event.target.value)}><option value="">Escolha uma pessoa</option>{members.filter((member) => member.user_id !== userId).map((member) => <option key={member.user_id} value={member.user_id}>{memberLabel(member.user_id)}{member.active ? '' : ' · sem acesso'}</option>)}</select></label><label>Valor pago<input required type="text" inputMode="decimal" placeholder="0,00" value={settlementAmount} onChange={(event) => setSettlementAmount(event.target.value)} /></label><label>Como foi pago?<select value={settlementMethod} onChange={(event) => setSettlementMethod(event.target.value as Exclude<SettlementPaymentMethod, 'splitwise'>)}><option value="pix">Pix</option><option value="dinheiro">Dinheiro</option><option value="transferencia">Transferência bancária</option><option value="cartao">Cartão</option><option value="outro">Outro</option></select></label><label>Data do pagamento<input required type="date" value={settlementDate} onChange={(event) => setSettlementDate(event.target.value)} /></label></div><div className="form-actions"><button type="button" className="button button-light" disabled={busy} onClick={() => setSettlementFormOpen(false)}>Cancelar</button><button type="submit" className="button button-dark" disabled={busy || !settlementRecipient || !settlementAmount.trim()}>{busy ? 'Registrando…' : 'Registrar pagamento'}</button></div></form>}
       {settlementNotice && <p className="auth-message" role="status">{settlementNotice}</p>}
     </div>
-    {groupSettlements.length > 0 && <details className="settlement-panel settlement-history"><summary><span><strong>Acertos registrados</strong><small>{groupSettlements.length} {groupSettlements.length === 1 ? 'pagamento confirmado' : 'pagamentos confirmados'}</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="settlement-list">{groupSettlements.map((item) => { const paidByUser = item.paid_by === userId; const receivedByUser = item.received_by === userId; return <div className={`balance-row settlement-row${paidByUser ? ' settlement-paid' : receivedByUser ? ' settlement-received' : ''}`} key={item.id}><span><strong>{paidByUser ? `Você pagou para ${memberLabel(item.received_by)}` : receivedByUser ? `${memberLabel(item.paid_by)} pagou para você` : `${memberLabel(item.paid_by)} pagou para ${memberLabel(item.received_by)}`}</strong><small>{item.description} · {settlementPaymentLabels[item.payment_method] ?? 'Forma não informada'} · {new Date(`${item.settlement_date}T12:00:00`).toLocaleDateString('pt-BR')}</small></span><strong>{formatBrlCents(item.amount_cents)}</strong></div> })}</div><small>Acertos reduzem os saldos e ficam separados do total de despesas. Vermelho: você pagou; verde: você recebeu.</small></details>}
+    {groupSettlements.length > 0 && <details className="settlement-panel settlement-history"><summary><span><strong>Acertos registrados</strong><small>{groupSettlements.length} {groupSettlements.length === 1 ? 'pagamento confirmado' : 'pagamentos confirmados'}</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="settlement-list">{groupSettlements.map((item) => { const paidByUser = item.paid_by === userId; const receivedByUser = item.received_by === userId; return <div className={`balance-row settlement-row${paidByUser ? ' settlement-paid' : receivedByUser ? ' settlement-received' : ''}`} key={item.id}><span><strong>{paidByUser ? <>Você pagou para {memberLink(item.received_by)}</> : receivedByUser ? <>{memberLink(item.paid_by)} pagou para você</> : <>{memberLink(item.paid_by)} pagou para {memberLink(item.received_by)}</>}</strong><small>{item.description} · {settlementPaymentLabels[item.payment_method] ?? 'Forma não informada'} · {new Date(`${item.settlement_date}T12:00:00`).toLocaleDateString('pt-BR')}</small></span><strong>{formatBrlCents(item.amount_cents)}</strong></div> })}</div><small>Acertos reduzem os saldos e ficam separados do total de despesas. Vermelho: você pagou; verde: você recebeu.</small></details>}
     <div className="section-title detail-section-title chart-section-heading">
       <div><h2>Despesas por categoria</h2><p>Veja como os gastos se distribuem no período escolhido.</p></div>
       <div className="chart-switch" role="group" aria-label="Tipo de gráfico"><button className={chartType === 'bars' ? 'selected' : ''} onClick={() => setChartType('bars')}>Barras</button><button className={chartType === 'donut' ? 'selected' : ''} onClick={() => setChartType('donut')}>Rosca</button><button className={chartType === 'trend' ? 'selected' : ''} onClick={() => setChartType('trend')}>Tendência</button></div>
@@ -617,9 +620,9 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense }:
       ? <p className="report-range-summary report-range-error">A data inicial precisa ser anterior à data final.</p>
       : <p className="report-range-summary">{reportExpenses.length} {reportExpenses.length === 1 ? 'despesa' : 'despesas'} · {reportPeriod === 'all' ? 'desde o início' : periodStart && periodEnd ? `${new Date(`${periodStart}T12:00:00`).toLocaleDateString('pt-BR')} a ${new Date(`${periodEnd}T12:00:00`).toLocaleDateString('pt-BR')}` : 'selecione um período'} · {formatBrlCents(reportExpenses.reduce((sum, expense) => sum + expense.amount_cents, 0))}</p>}
     {validReportRange
-      ? <GroupExpenseCharts rows={categoryTotals} expenses={reportExpenses} periodStart={periodStart} periodEnd={periodEnd} labels={categoryLabels} format={formatBrlCents} chartType={chartType} />
+      ? <GroupExpenseCharts rows={categoryTotals} expenses={reportExpenses} periodStart={periodStart} periodEnd={periodEnd} labels={chartCategoryLabels} format={formatBrlCents} chartType={chartType} onSelectCategory={setCategoryFilter} />
       : <div className="chart-card"><p className="chart-empty">Escolha um período válido para visualizar os gastos.</p></div>}
-    <div className="section-title detail-section-title"><div><h2>Despesas</h2><p>Registros organizados por mês, do mais recente para o mais antigo.</p></div><label>Categoria<select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value as ExpenseCategory | 'all')}><option value="all">Todas</option>{Object.entries(categoryLabels).map(([key,label]) => <option key={key} value={key}>{categoryEmojis[key as ExpenseCategory]} {label}</option>)}</select></label></div>
+    <div className="section-title detail-section-title"><div><h2>Despesas</h2><p>{categoryFilter === 'all' ? 'Registros organizados por mês, do mais recente para o mais antigo.' : `Categoria selecionada: ${categoryFilter === 'contas_da_casa' ? 'Contas da Casa' : categoryLabels[categoryFilter]}`}</p></div><label>Categoria<select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value as ExpenseCategory | 'contas_da_casa' | 'all')}><option value="all">Todas</option>{Object.entries(categoryLabels).filter(([key]) => !houseBillCategories.includes(key as ExpenseCategory)).map(([key,label]) => <option key={key} value={key}>{categoryEmojis[key as ExpenseCategory]} {label}</option>)}<optgroup label="Contas da Casa"><option value="contas_da_casa">🏠 Todas as contas da casa</option>{houseBillCategories.map((key) => <option key={key} value={key}>{categoryEmojis[key]} {categoryLabels[key]}</option>)}</optgroup></select></label></div>
     {expenseMonthGroups.length === 0
       ? <div className="empty-expenses"><strong>Nenhuma despesa nesta categoria.</strong><p>Registre uma despesa ou escolha outra categoria.</p></div>
       : <div className="expense-month-groups">{expenseMonthGroups.map(({ month, expenses, total }) => {
@@ -632,42 +635,41 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense }:
   </section>
 }
 
-function GroupExpenseCharts({ rows, expenses, periodStart, periodEnd, labels, format, chartType }: {
-  rows: { category: ExpenseCategory; all: number }[]
+function GroupExpenseCharts({ rows, expenses, periodStart, periodEnd, labels, format, chartType, onSelectCategory }: {
+  rows: { category: ChartCategory; all: number }[]
   expenses: ExpenseRecord[]
   periodStart: string
   periodEnd: string
-  labels: Record<ExpenseCategory, string>
+  labels: Record<ChartCategory, string>
   format: (cents: number) => string
   chartType: 'bars' | 'donut' | 'trend'
+  onSelectCategory: (category: ChartCategory) => void
 }) {
-  const colors = ['#77a744', '#d59764', '#729bb3', '#b98665', '#b69bc7', '#d4bc66']
+  const colors = ['#77a744', '#d59764', '#729bb3', '#b98665', '#b69bc7', '#d4bc66', '#8caa75']
   const total = rows.reduce((sum, row) => sum + row.all, 0)
   const palette = rows.map((row, index) => ({ ...row, color: colors[index], share: total ? row.all / total * 100 : 0 }))
-  const start = new Date(`${periodStart}T00:00:00Z`)
-  const end = new Date(`${periodEnd}T00:00:00Z`)
-  const totalDays = Math.max(1, Math.round((end.getTime() - start.getTime()) / 86400000) + 1)
-  const bucketCount = Math.min(6, totalDays)
-  const trend = Array.from({ length: bucketCount }, (_, index) => {
-    const firstDay = Math.floor(index * totalDays / bucketCount)
-    const afterLastDay = Math.floor((index + 1) * totalDays / bucketCount)
-    const bucketStart = new Date(start.getTime() + firstDay * 86400000).toISOString().slice(0, 10)
-    const bucketEnd = new Date(start.getTime() + afterLastDay * 86400000).toISOString().slice(0, 10)
-    const value = expenses.filter((expense) => expense.expense_date >= bucketStart && expense.expense_date < bucketEnd).reduce((sum, expense) => sum + expense.amount_cents, 0)
-    const labelDate = new Date(`${bucketStart}T12:00:00`)
-    const label = totalDays <= 7
-      ? labelDate.toLocaleDateString('pt-BR', { weekday: 'short' }).replace('.', '')
-      : totalDays <= 31 ? `${String(labelDate.getDate()).padStart(2, '0')}`
-        : labelDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })
-    return { label, value }
-  })
+  const firstMonth = new Date(`${periodStart.slice(0, 7)}-01T12:00:00`)
+  const lastMonth = new Date(`${periodEnd.slice(0, 7)}-01T12:00:00`)
+  const trend: { label: string; value: number }[] = []
+  for (const month = new Date(firstMonth); month <= lastMonth; month.setMonth(month.getMonth() + 1)) {
+    const key = `${month.getFullYear()}-${String(month.getMonth() + 1).padStart(2, '0')}`
+    trend.push({
+      label: month.toLocaleDateString('pt-BR', { month: 'short', year: 'numeric' }).replace('.', ''),
+      value: expenses.filter((expense) => expense.expense_date.startsWith(key) && expense.expense_date >= periodStart && expense.expense_date <= periodEnd).reduce((sum, expense) => sum + expense.amount_cents, 0),
+    })
+  }
   const maximum = Math.max(1, ...trend.map((item) => item.value))
-  const trendX = (index: number) => trend.length === 1 ? 200 : 20 + index * (360 / (trend.length - 1))
-  const points = trend.map((item, index) => `${trendX(index)},${108 - item.value / maximum * 82}`).join(' ')
+  const columnWidth = 104
+  const chartWidth = Math.max(416, trend.length * columnWidth)
+  const trendX = (index: number) => columnWidth / 2 + index * columnWidth
+  const trendY = (value: number) => 112 - value / maximum * 76
+  const points = trend.map((item, index) => `${trendX(index)},${trendY(item.value)}`).join(' ')
+  const categoryExpenses = (category: ChartCategory) => expenses.filter((expense) => category === 'contas_da_casa' ? houseBillCategories.includes(expense.category) : expense.category === category)
+  const categoryTitle = (category: ChartCategory) => categoryExpenses(category).map((expense) => `${expense.description} · ${format(expense.amount_cents)}`).join('\n') || 'Nenhuma despesa nesta categoria no período.'
   return <div className="chart-card">
-    {chartType === 'bars' && <div className="chart-bars">{palette.map((item) => <div className="chart-bar-row" key={item.category}><div className="chart-bar-label"><span>{labels[item.category]}</span><strong>{format(item.all)}</strong></div><div className="chart-track"><i style={{ width: `${item.share}%`, background: item.color }} /></div></div>)}</div>}
-    {chartType === 'donut' && <div className="chart-donut-layout"><div className="chart-donut" style={{ background: `conic-gradient(${palette.map((item, index) => `${item.color} ${palette.slice(0,index).reduce((sum, row) => sum + row.share, 0)}% ${palette.slice(0,index + 1).reduce((sum, row) => sum + row.share, 0)}%`).join(',')})` }}><div><strong>{format(total)}</strong><small>Total registrado</small></div></div><div className="chart-legend">{palette.map((item) => <div key={item.category}><span style={{ background: item.color }} />{labels[item.category]}<strong>{Math.round(item.share)}%</strong></div>)}</div></div>}
-    {chartType === 'trend' && <div className="chart-trend"><svg viewBox="0 0 400 130" role="img" aria-label="Tendência das despesas no período selecionado"><path className="trend-area" d={`M ${points.split(' ').join(' L ')} L 380 112 L 20 112 Z`} /><polyline points={points} /><line x1="20" y1="112" x2="380" y2="112" />{trend.map((item, index) => <g key={`${item.label}-${index}`}><circle cx={trendX(index)} cy={108 - item.value / maximum * 82} r="4" /><text x={trendX(index)} y="128" textAnchor="middle">{item.label}</text></g>)}</svg><div className="chart-trend-totals" style={{ gridTemplateColumns: `repeat(${trend.length}, minmax(0, 1fr))` }}>{trend.map((item, index) => <span key={`${item.label}-${index}`}>{format(item.value)}</span>)}</div></div>}
+    {chartType === 'bars' && <div className="chart-bars">{palette.map((item) => <button className="chart-bar-row chart-category-select" type="button" key={item.category} title={categoryTitle(item.category)} onClick={() => onSelectCategory(item.category)}><span className="chart-bar-label"><span>{labels[item.category]}</span><strong>{format(item.all)}</strong></span><span className="chart-track"><i style={{ width: `${item.share}%`, background: item.color }} /></span></button>)}</div>}
+    {chartType === 'donut' && <div className="chart-donut-layout"><div className="chart-donut" style={{ background: `conic-gradient(${palette.map((item, index) => `${item.color} ${palette.slice(0,index).reduce((sum, row) => sum + row.share, 0)}% ${palette.slice(0,index + 1).reduce((sum, row) => sum + row.share, 0)}%`).join(',')})` }}><div><strong>{format(total)}</strong><small>Total registrado</small></div></div><div className="chart-legend">{palette.map((item) => <button className="chart-legend-item" type="button" key={item.category} title={categoryTitle(item.category)} onClick={() => onSelectCategory(item.category)}><span style={{ background: item.color }} />{labels[item.category]}<strong>{Math.round(item.share)}%</strong></button>)}</div></div>}
+    {chartType === 'trend' && <div className="chart-trend-scroll"><div className="chart-trend" style={{ width: chartWidth }}><svg viewBox={`0 0 ${chartWidth} 140`} role="img" aria-label="Tendência mensal das despesas no período selecionado"><path className="trend-area" d={`M ${points.split(' ').join(' L ')} L ${chartWidth - columnWidth / 2} 112 L ${columnWidth / 2} 112 Z`} /><polyline points={points} /><line x1={columnWidth / 2} y1="112" x2={chartWidth - columnWidth / 2} y2="112" />{trend.map((item, index) => <g key={`${item.label}-${index}`}><title>{`${item.label}: ${format(item.value)}`}</title><circle cx={trendX(index)} cy={trendY(item.value)} r="4" /></g>)}</svg><div className="chart-trend-labels" style={{ gridTemplateColumns: `repeat(${trend.length}, ${columnWidth}px)` }}>{trend.map((item) => <div key={item.label}><strong>{format(item.value)}</strong><span>{item.label}</span></div>)}</div></div></div>}
     {total === 0 && <p className="chart-empty">Adicione despesas para visualizar os gráficos.</p>}
   </div>
 }
@@ -758,7 +760,7 @@ function Expense({ client, groupId, groupName, userId, expense, onBack, onSaved 
   return <section className="page-wrap form-wrap"><button className="back-link" onClick={onBack}>← Voltar ao grupo</button><div className="eyebrow">{groupName}</div><h1>{expense ? 'Editar despesa' : 'Nova despesa'}<span className="heading-dot">.</span></h1><p className="form-intro">Registre o gasto, escolha como dividir e confira as parcelas antes de salvar.</p>{includesFormerParticipant && <p className="invite-help">Esta despesa inclui participante removido. O registro e as parcelas foram preservados e não podem ser recalculados.</p>}{loading ? <p className="auth-loading">Carregando participantes…</p> : <form onSubmit={(event) => void submit(event)}>
     <label>Descrição<input value={description} onChange={(event) => setDescription(event.target.value)} maxLength={200} required placeholder="Ex.: almoço na praia" disabled={busy} /></label>
     <div className="form-two"><label>Valor total<div className="money-input"><span>R$</span><input value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" required placeholder="0,00" disabled={busy} /></div></label><label>Quem pagou?<select value={paidBy} onChange={(event) => setPaidBy(event.target.value)} required disabled={busy}><option value="" disabled>Selecione</option>{activeMembers.map((member) => <option key={member.user_id} value={member.user_id}>{memberLabel(member)}{member.user_id === userId ? ' (você)' : ''}</option>)}</select></label></div>
-    <div className="form-two"><label>Categoria<select value={category} onChange={(event) => setCategory(event.target.value as ExpenseCategory)} disabled={busy}><option value="alimentacao">🍴 Alimentação</option><option value="hospedagem">🏡 Hospedagem</option><option value="transporte">🚗 Transporte</option><option value="corrida">🍁 Corrida</option><option value="atividades">🎟️ Atividades</option><option value="outros">✳ Outros</option></select></label><label>Data da despesa<input type="date" value={expenseDate} onChange={(event) => setExpenseDate(event.target.value)} required disabled={busy} /></label></div>
+    <div className="form-two"><label>Categoria<select value={category} onChange={(event) => setCategory(event.target.value as ExpenseCategory)} disabled={busy}><option value="alimentacao">🍴 Alimentação</option><option value="hospedagem">🏡 Hospedagem</option><option value="transporte">🚗 Transporte</option><option value="corrida">🍁 Corrida</option><option value="atividades">🎟️ Atividades</option><option value="outros">✳ Outros</option><optgroup label="Contas da Casa"><option value="aluguel">🏠 Aluguel</option><option value="luz">💡 Luz</option><option value="agua">💧 Água</option><option value="iptu">🏛️ IPTU</option></optgroup></select></label><label>Data da despesa<input type="date" value={expenseDate} onChange={(event) => setExpenseDate(event.target.value)} required disabled={busy} /></label></div>
     <label>Forma de divisão<select value={splitMode} onChange={(event) => setSplitMode(event.target.value as SplitMode)} disabled={busy}><option value="equal">Igualmente</option><option value="percentage">Por porcentagem</option><option value="custom">Valores definidos por pessoa</option></select></label>
     <fieldset className="participant-picker"><legend>Participantes</legend>{activeMembers.map((member) => <label key={member.user_id}><input type="checkbox" checked={participantIds.includes(member.user_id)} onChange={(event) => { const ids = event.target.checked ? [...participantIds, member.user_id] : participantIds.filter((id) => id !== member.user_id); setParticipantIds(ids); if (event.target.checked) { const equal = ids.length ? 100 / ids.length : 0; setPercentageInputs((current) => Object.fromEntries(ids.map((id) => [id, current[id] ?? String(equal)]))) } }} disabled={busy} /><span>{memberLabel(member)}{member.user_id === userId ? ' (você)' : ''}</span></label>)}</fieldset>
     {splitMode === 'percentage' && participantIds.map((id) => <label key={id}>{memberLabel(members.find((member) => member.user_id === id)!)} · porcentagem<input type="number" min="0" max="100" step="0.01" value={percentageInputs[id] ?? ''} onChange={(event) => setPercentageInputs((current) => ({ ...current, [id]: event.target.value }))} disabled={busy} /></label>)}
@@ -826,8 +828,87 @@ function MyInvitations({ invitations, onRefresh, onAccept }: { invitations: MyGr
   return <section className="page-wrap"><div className="eyebrow">ESPAÇO PESSOAL</div><h1>Convites recebidos<span className="heading-dot">.</span></h1><p className="form-intro">Convites enviados ao e-mail da sua conta.</p>{error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}{invitations.length === 0 ? <div className="empty-expenses"><strong>Nenhum convite pendente.</strong><p>Quando alguém convidar o e-mail desta conta, ele aparecerá aqui.</p><button className="text-button" onClick={onRefresh}>Atualizar</button></div> : <div className="invitation-list">{invitations.map((invitation) => { const expired = invitation.status === 'expired' || new Date(invitation.expires_at) <= new Date(); return <div className="invitation-row" key={invitation.id}><div><strong>{invitation.group_name}</strong><small>{invitation.invited_email} · válido até {new Date(invitation.expires_at).toLocaleDateString('pt-BR')}</small></div><span className={`invite-status status-${expired ? 'expired' : invitation.status}`}>{expired ? 'Expirado' : 'Pendente'}</span><button className="button button-dark" disabled={busy || expired} onClick={() => void accept(invitation.id)}>{busy ? 'Aceitando…' : 'Aceitar convite'}</button></div> })}</div>}</section>
 }
 
+function UserProfile({ client, userId, viewerId, onBack, onOpenGroup }: {
+  client: NonNullable<typeof supabase>
+  userId: string
+  viewerId: string
+  onBack: () => void
+  onOpenGroup: (id: string) => void
+}) {
+  const [profile, setProfile] = useState<GroupProfileRecord | null>(null)
+  const [sharedGroups, setSharedGroups] = useState<{ id: string; name: string; created_at: string; archived_at: string | null; sharedSince: string; viewerBalance: number; profileBalance: number; history: { id: string; date: string; description: string; amount: number; kind: 'expense' | 'settlement' }[] }[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    void (async () => {
+      try {
+        const profileData = await getProfile(client, userId)
+        if (!profileData) throw new Error('Este perfil não existe ou você não tem um grupo em comum com esta pessoa.')
+        const { data: memberships, error: membershipError } = await client.from('group_members')
+          .select('group_id, joined_at, active').eq('user_id', userId).eq('active', true)
+        if (membershipError) throw membershipError
+        const groupIds = (memberships ?? []).map((row) => row.group_id as string)
+        if (groupIds.length === 0) {
+          if (active) { setProfile(profileData); setSharedGroups([]) }
+          return
+        }
+        const { data: groupRows, error: groupError } = await client.from('groups')
+          .select('id, name, created_at, archived_at').in('id', groupIds).order('created_at', { ascending: true })
+        if (groupError) throw groupError
+        const summaries = await Promise.all((groupRows ?? []).map(async (group) => {
+          const [members, expenses, settlements] = await Promise.all([
+            getGroupMembers(client, group.id),
+            listGroupExpenses(client, group.id),
+            listGroupSettlements(client, group.id),
+          ])
+          const viewer = members.find((member) => member.user_id === viewerId && member.active)
+          const target = members.find((member) => member.user_id === userId && member.active)
+          if (!viewer || !target) return null
+          const balances = calculateBalances(expenses, members.map((member) => member.user_id), undefined, settlements)
+          const involved = (expense: ExpenseRecord, id: string) => expense.paid_by === id || expense.shares.some((share) => share.user_id === id)
+          const history = [
+            ...expenses.filter((expense) => involved(expense, viewerId) && involved(expense, userId)).map((expense) => ({ id: expense.id, date: expense.expense_date, description: expense.description, amount: expense.amount_cents, kind: 'expense' as const })),
+            ...settlements.filter((item) => [item.paid_by, item.received_by].includes(viewerId) && [item.paid_by, item.received_by].includes(userId)).map((item) => ({ id: item.id, date: item.settlement_date, description: item.description, amount: item.amount_cents, kind: 'settlement' as const })),
+          ].sort((a, b) => b.date.localeCompare(a.date))
+          const targetMembership = (memberships ?? []).find((row) => row.group_id === group.id)
+          return {
+            ...group,
+            sharedSince: [viewer.joined_at, targetMembership?.joined_at ?? target.joined_at].sort().at(-1) ?? group.created_at,
+            viewerBalance: balances.find((balance) => balance.user_id === viewerId)?.balance_cents ?? 0,
+            profileBalance: balances.find((balance) => balance.user_id === userId)?.balance_cents ?? 0,
+            history,
+          }
+        }))
+        if (active) { setProfile(profileData); setSharedGroups(summaries.filter((summary) => summary !== null)) }
+      } catch (reason) {
+        if (active) setError(reason instanceof Error ? reason.message : 'Não foi possível abrir este perfil.')
+      } finally {
+        if (active) setLoading(false)
+      }
+    })()
+    return () => { active = false }
+  }, [client, userId, viewerId])
+
+  const displayName = profile?.display_name || (profile?.username ? `@${profile.username}` : 'Perfil do participante')
+  return <section className="page-wrap profile-page"><button className="back-link" onClick={onBack}>← Voltar</button>
+    {loading ? <p className="auth-loading">Carregando perfil…</p> : error ? <p className="auth-error" role="alert">{error}</p> : profile && <>
+      <div className="profile-heading"><div className="profile-photo-preview">{profile.avatar_url ? <img src={profile.avatar_url} alt={`Foto de ${displayName}`} /> : (profile.display_name || profile.username || 'P').slice(0, 1).toUpperCase()}</div><div><div className="eyebrow">PERFIL DO PARTICIPANTE</div><h1>{displayName}<span className="heading-dot">.</span></h1>{profile.username && <p>@{profile.username}</p>}</div></div>
+      <div className="profile-details-grid"><article className="settlement-panel"><small>NOME</small><strong>{profile.display_name || 'Não informado'}</strong></article><article className="settlement-panel"><small>APELIDO</small><strong>{profile.username ? `@${profile.username}` : 'Não definido'}</strong></article><article className="settlement-panel"><small>CHAVE PIX</small><strong>{profile.pix_key || 'Não informada'}</strong></article></div>
+      <div className="section-title"><div><h2>Grupos em comum</h2><p>{sharedGroups.length} {sharedGroups.length === 1 ? 'grupo compartilhado' : 'grupos compartilhados'} com você</p></div></div>
+      {sharedGroups.length === 0 ? <div className="empty-expenses"><strong>Nenhum grupo ativo em comum.</strong><p>Os detalhes do perfil ficam disponíveis para pessoas que compartilham um grupo ativo.</p></div> : <div className="profile-groups">{sharedGroups.map((group) => <article className="settlement-panel profile-group" key={group.id}>
+        <div className="profile-group-heading"><div><h3>{group.name}</h3><small>Período do grupo: {new Date(group.created_at).toLocaleDateString('pt-BR')} – {group.archived_at ? new Date(group.archived_at).toLocaleDateString('pt-BR') : 'em andamento'} · Em comum desde {new Date(group.sharedSince).toLocaleDateString('pt-BR')}</small></div><button className="button button-light" onClick={() => onOpenGroup(group.id)}>Abrir grupo</button></div>
+        <div className="profile-balances"><p>Seu saldo no grupo <strong className={group.viewerBalance > 0 ? 'balance-positive' : group.viewerBalance < 0 ? 'balance-negative' : ''}>{formatBrlCents(group.viewerBalance)}</strong></p><p>Saldo de {profile.username ? `@${profile.username}` : 'esta pessoa'} <strong className={group.profileBalance > 0 ? 'balance-positive' : group.profileBalance < 0 ? 'balance-negative' : ''}>{formatBrlCents(group.profileBalance)}</strong></p></div>
+        <details className="profile-history"><summary>Histórico compartilhado · {group.history.length} registros</summary>{group.history.length === 0 ? <p>Nenhuma despesa ou acerto compartilhado neste grupo.</p> : <div className="settlement-list">{group.history.map((item) => <div className="balance-row" key={`${item.kind}-${item.id}`}><span><strong>{item.description}</strong><small>{item.kind === 'expense' ? 'Despesa' : 'Acerto'} · {new Date(`${item.date}T12:00:00`).toLocaleDateString('pt-BR')}</small></span><strong>{formatBrlCents(item.amount)}</strong></div>)}</div>}</details>
+      </article>)}</div>}
+    </>}
+  </section>
+}
+
 function Account({ client, email, userId, onSignOut, busy }: { client: NonNullable<typeof supabase>; email: string; userId: string; onSignOut: () => Promise<void>; busy: boolean }) {
   const [username, setUsername] = useState('')
+  const [pixKey, setPixKey] = useState('')
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
   const [avatarFile, setAvatarFile] = useState<File | null>(null)
   const [profileLoading, setProfileLoading] = useState(true)
@@ -836,18 +917,19 @@ function Account({ client, email, userId, onSignOut, busy }: { client: NonNullab
   const [notice, setNotice] = useState<string | null>(null)
   useEffect(() => {
     let active = true
-    void client.from('profiles').select('username, avatar_url').eq('id', userId).maybeSingle().then(async ({ data, error: queryError }) => {
+    void client.from('profiles').select('username, avatar_url, pix_key').eq('id', userId).maybeSingle().then(async ({ data, error: queryError }) => {
       if (!active) return
       let profile = data
       let profileError = queryError
       if (imageColumnsMissing(queryError)) {
-        const fallback = await client.from('profiles').select('username').eq('id', userId).maybeSingle()
+        const fallback = await client.from('profiles').select('username, pix_key').eq('id', userId).maybeSingle()
         profile = fallback.data as typeof profile
         profileError = fallback.error
       }
       if (profileError) setError(profileError.message)
       setUsername(profile?.username ?? '')
       setAvatarUrl(profile?.avatar_url ?? null)
+      setPixKey(profile?.pix_key ?? '')
       setProfileLoading(false)
     })
     return () => { active = false }
@@ -857,6 +939,7 @@ function Account({ client, email, userId, onSignOut, busy }: { client: NonNullab
     setSaving(true); setError(null); setNotice(null)
     try {
       const saved = await setMyUsername(client, username)
+      await setMyPixKey(client, userId, pixKey)
       let nextAvatarUrl = avatarUrl
       if (avatarFile) {
         nextAvatarUrl = await uploadImage(client, `profiles/${userId}/avatar`, avatarFile)
@@ -871,7 +954,7 @@ function Account({ client, email, userId, onSignOut, busy }: { client: NonNullab
       setError(reason instanceof Error ? reason.message : 'Não foi possível salvar o identificador. Talvez ele já esteja em uso.')
     } finally { setSaving(false) }
   }
-  return <section className="page-wrap form-wrap"><div className="eyebrow">SUA CONTA</div><h1>Minha conta<span className="heading-dot">.</span></h1><p className="form-intro">Seu e-mail fica visível apenas nesta área de conta e nos fluxos de convite.</p>{profileLoading ? <p className="auth-loading">Carregando perfil…</p> : <form onSubmit={(event) => void saveProfile(event)}><div className="profile-photo-editor"><div className="profile-photo-preview">{avatarFile ? <img src={URL.createObjectURL(avatarFile)} alt="Prévia da foto de perfil" /> : avatarUrl ? <img src={avatarUrl} alt="Foto de perfil atual" /> : username.slice(0,1).toUpperCase() || 'U'}</div><label>Foto de perfil<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setAvatarFile(event.target.files?.[0] ?? null)} disabled={saving} /><small>JPG, PNG ou WebP · até 5 MB.</small></label></div><label>Identificador público<input value={username} onChange={(event) => setUsername(event.target.value)} minLength={3} maxLength={24} pattern="[A-Za-z0-9_]{3,24}" placeholder="ex.: ana_silva" required disabled={saving} /></label><small>Use de 3 a 24 letras sem acento, números ou sublinhados. Será exibido como @{username || 'usuario'}.</small><label>E-mail da conta<input value={email} readOnly /></label>{error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}<div className="form-actions"><button className="button button-dark" type="submit" disabled={saving}>{saving ? 'Salvando…' : 'Salvar perfil'}</button><button className="button button-light" type="button" onClick={() => void onSignOut()} disabled={busy}>{busy ? 'Saindo…' : 'Sair da conta'}</button></div></form>}</section>
+  return <section className="page-wrap form-wrap"><div className="eyebrow">SUA CONTA</div><h1>Minha conta<span className="heading-dot">.</span></h1><p className="form-intro">Seu e-mail fica visível apenas nesta área de conta e nos fluxos de convite.</p>{profileLoading ? <p className="auth-loading">Carregando perfil…</p> : <form onSubmit={(event) => void saveProfile(event)}><div className="profile-photo-editor"><div className="profile-photo-preview">{avatarFile ? <img src={URL.createObjectURL(avatarFile)} alt="Prévia da foto de perfil" /> : avatarUrl ? <img src={avatarUrl} alt="Foto de perfil atual" /> : username.slice(0,1).toUpperCase() || 'U'}</div><label>Foto de perfil<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setAvatarFile(event.target.files?.[0] ?? null)} disabled={saving} /><small>JPG, PNG ou WebP · até 5 MB.</small></label></div><label>Identificador público<input value={username} onChange={(event) => setUsername(event.target.value)} minLength={3} maxLength={24} pattern="[A-Za-z0-9_]{3,24}" placeholder="ex.: ana_silva" required disabled={saving} /></label><small>Use de 3 a 24 letras sem acento, números ou sublinhados. Será exibido como @{username || 'usuario'}.</small><label>Chave PIX (opcional)<input value={pixKey} onChange={(event) => setPixKey(event.target.value)} maxLength={128} placeholder="CPF, telefone, e-mail ou chave aleatória" disabled={saving} /><small>Visível somente para você e para pessoas com quem compartilha um grupo.</small></label><label>E-mail da conta<input value={email} readOnly /></label>{error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}<div className="form-actions"><button className="button button-dark" type="submit" disabled={saving}>{saving ? 'Salvando…' : 'Salvar perfil'}</button><button className="button button-light" type="button" onClick={() => void onSignOut()} disabled={busy}>{busy ? 'Saindo…' : 'Sair da conta'}</button></div></form>}</section>
 }
 
 export default App

@@ -285,3 +285,14 @@ Na revisão inicial, as funções auxiliares `is_current_user_group_member`, `is
 - O Supabase Free pode pausar projetos com pouca atividade. Planejar como reativar e exportar os dados.
 - Um frontend publicado é público por natureza; a privacidade depende da autenticação e, principalmente, das políticas RLS corretas.
 - Atualizar este documento ao fechar decisões ou concluir cada etapa. Manter o status da próxima etapa acionável.
+
+### Etapa 9 — Perfis, visão administrativa e categorias da casa (2026-10-23)
+
+- [x] Remover a edição do nome de outros participantes e restringir a alteração de papel a admins ativos. O RPC de membros agora grava somente o papel; apelidos ficam no perfil e são alterados pelo próprio titular. Valores legados de nome local do grupo deixaram de sobrepor o nome do perfil na interface.
+- [x] Criar perfil acessível a partir dos nomes no grupo, com nome, apelido, foto, PIX, grupos em comum, saldo de cada pessoa, período compartilhado e histórico de despesas/acertos entre elas. A API seleciona apenas os campos necessários do perfil, sem e-mail. PIX opcional em texto é editável pelo titular e legível sob a política RLS existente de perfil; nomes dos grupos e histórico continuam limitados a associações ativas em comum.
+- [x] Criar botão de Visão de admin visível para admins ativos e mover a importação Splitwise para essa visão. A importação mantém prévia/validações e as chaves únicas existentes. Helpers de autorização passam a exigir associação ativa também no RPC.
+- [x] Acrescentar Aluguel, Luz, Água e IPTU ao modelo de categoria, agrupados em Contas da Casa nos relatórios; adicionar seleção clicável de categorias e exibir todos os meses/valores no gráfico de tendência, com rolagem horizontal quando necessário.
+- [x] Atualizar README e este plano. `npm run build` passou com Node 24.22.1; `git diff --check` passou. Nenhum teste adicional foi executado.
+- [x] Aplicar a migration `20261023000900_perfis_categorias_e_visao_admin.sql` ao Supabase vinculado. A listagem remota e o dry-run confirmaram que somente a 009 estava pendente; a verificação posterior confirmou 001–009 aplicadas. A migration altera schema, políticas e RPCs, sem reclassificar despesas ou registrar operações financeiras.
+- [ ] Publicar o frontend depois da migration, verificando o workflow de Pages.
+- [ ] Para revisão autenticada local, usar Supabase local isolado, conta e dados sintéticos, e apontar `.env.local` à URL/chave locais. O `.env.local` existente aponta ao remoto e não deve ser usado para testes. Não usar reset no banco local atual; ele ainda está na 004, com 005–009 pendentes.

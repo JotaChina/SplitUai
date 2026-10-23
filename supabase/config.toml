@@ -8,6 +8,7 @@ project_id = "splituai"
 [auth]
 enabled = true
 site_url = "https://jotachina.github.io/SplitUai/"
+additional_redirect_urls = ["http://localhost:5173/**", "http://127.0.0.1:5173/**"]
 enable_signup = false
 enable_anonymous_sign_ins = false
 
@@ -15,3 +16,8 @@ enable_anonymous_sign_ins = false
 # Keep the email provider available for existing invited users to sign in.
 # The global auth.enable_signup setting above still blocks public signups.
 enable_signup = true
+
+[functions.send-group-invitation]
+# Keep the gateway's JWT verification enabled; the function also resolves the
+# session user and checks active group-admin authorization through an RPC.
+verify_jwt = true

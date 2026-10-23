@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 
-export type ExpenseCategory = 'hospedagem' | 'alimentacao' | 'transporte' | 'atividades' | 'outros'
+export type ExpenseCategory = 'hospedagem' | 'alimentacao' | 'transporte' | 'corrida' | 'atividades' | 'outros'
 export type SplitMode = 'equal' | 'percentage' | 'custom'
 export type ExpenseShare = { user_id: string; amount_cents: number; percentage?: number | null }
 export type ExpenseInstallment = {
@@ -31,6 +31,19 @@ export type ExpenseRecord = {
   shares: ExpenseShare[]
   installments: ExpenseInstallmentRecord[]
 }
+export type SettlementRecord = {
+  id: string
+  group_id: string
+  created_by: string
+  paid_by: string
+  received_by: string
+  amount_cents: number
+  settlement_date: string
+  description: string
+  payment_method: SettlementPaymentMethod
+  created_at: string
+}
+export type SettlementPaymentMethod = 'pix' | 'dinheiro' | 'transferencia' | 'cartao' | 'outro' | 'splitwise'
 export type ExpenseInput = {
   description: string
   category: ExpenseCategory
@@ -46,7 +59,7 @@ export type ExpenseInput = {
 export type GroupBalance = { user_id: string; balance_cents: number }
 export type SettlementSuggestion = { from_user_id: string; to_user_id: string; amount_cents: number }
 
-export function calculateBalances(expenses: ExpenseRecord[], memberIds: string[], month?: string): GroupBalance[] {
+export function calculateBalances(expenses: ExpenseRecord[], memberIds: string[], month?: string, settlements: SettlementRecord[] = []): GroupBalance[] {
   const balances = new Map<string, bigint>([...new Set(memberIds)].map((id) => [id, 0n]))
   const add = (id: string, cents: bigint) => {
     if (!balances.has(id)) throw new Error('Uma despesa referencia alguém que não está no grupo.')
@@ -83,6 +96,12 @@ export function calculateBalances(expenses: ExpenseRecord[], memberIds: string[]
       if (sum + adjustment !== BigInt(expense.amount_cents)) throw new Error('Rateio e ajuste não fecham com o total.')
       if (adjustment) add(expense.paid_by, -adjustment)
     }
+  }
+  for (const settlement of settlements) {
+    if (month && settlement.settlement_date.slice(0, 7) !== month) continue
+    if (!Number.isSafeInteger(settlement.amount_cents) || settlement.amount_cents < 1) throw new Error('Valor de acerto inválido.')
+    add(settlement.paid_by, BigInt(settlement.amount_cents))
+    add(settlement.received_by, -BigInt(settlement.amount_cents))
   }
   if ([...balances.values()].reduce((sum, balance) => sum + balance, 0n) !== 0n) throw new Error('Os saldos do grupo não fecham em zero.')
   return [...balances].map(([user_id, balance]) => {
@@ -208,21 +227,24 @@ export async function listGroupExpenses(client: SupabaseClient, groupId: string)
   const expenses = (expenseRows ?? []) as Omit<ExpenseRecord, 'shares' | 'installments'>[]
   if (!expenses.length) return [] as ExpenseRecord[]
   const ids = expenses.map((expense) => expense.id)
-  const [shareResult, installmentResult] = await Promise.all([
-    client.from('expense_shares').select('expense_id,user_id,amount_cents,split_percentage').eq('group_id', groupId).in('expense_id', ids),
-    client.from('expense_installments').select('id,expense_id,installment_number,amount_cents,due_date').in('expense_id', ids).order('installment_number'),
+  const batches = <T,>(values: T[], size = 100) => Array.from({ length: Math.ceil(values.length / size) }, (_, index) => values.slice(index * size, (index + 1) * size))
+  const idBatches = batches(ids)
+  const [shareResults, installmentResults] = await Promise.all([
+    Promise.all(idBatches.map((batch) => client.from('expense_shares')
+      .select('expense_id,user_id,amount_cents,split_percentage').eq('group_id', groupId).in('expense_id', batch))),
+    Promise.all(idBatches.map((batch) => client.from('expense_installments')
+      .select('id,expense_id,installment_number,amount_cents,due_date').in('expense_id', batch).order('installment_number'))),
   ])
-  if (shareResult.error) throw shareResult.error
-  if (installmentResult.error) throw installmentResult.error
-  const installmentRows = installmentResult.data ?? []
-  const [installmentShareResult] = await Promise.all([
-    client.from('expense_installment_shares').select('installment_id,user_id,amount_cents').in('installment_id', installmentRows.map((row) => row.id)),
-  ])
-  if (installmentShareResult.error) throw installmentShareResult.error
+  for (const result of [...shareResults, ...installmentResults]) if (result.error) throw result.error
+  const installmentRows = installmentResults.flatMap((result) => result.data ?? [])
+  const installmentIdBatches = batches(installmentRows.map((row) => row.id))
+  const installmentShareResults = await Promise.all(installmentIdBatches.map((batch) => client.from('expense_installment_shares')
+    .select('installment_id,user_id,amount_cents').in('installment_id', batch)))
+  for (const result of installmentShareResults) if (result.error) throw result.error
   const shares = new Map<string, ExpenseShare[]>()
-  for (const row of shareResult.data ?? []) shares.set(row.expense_id, [...(shares.get(row.expense_id) ?? []), { user_id: row.user_id, amount_cents: Number(row.amount_cents), percentage: row.split_percentage == null ? null : Number(row.split_percentage) }])
+  for (const row of shareResults.flatMap((result) => result.data ?? [])) shares.set(row.expense_id, [...(shares.get(row.expense_id) ?? []), { user_id: row.user_id, amount_cents: Number(row.amount_cents), percentage: row.split_percentage == null ? null : Number(row.split_percentage) }])
   const installmentShares = new Map<string, ExpenseShare[]>()
-  for (const row of installmentShareResult.data ?? []) installmentShares.set(row.installment_id, [...(installmentShares.get(row.installment_id) ?? []), { user_id: row.user_id, amount_cents: Number(row.amount_cents) }])
+  for (const row of installmentShareResults.flatMap((result) => result.data ?? [])) installmentShares.set(row.installment_id, [...(installmentShares.get(row.installment_id) ?? []), { user_id: row.user_id, amount_cents: Number(row.amount_cents) }])
   const installments = new Map<string, ExpenseInstallmentRecord[]>()
   for (const row of installmentRows) installments.set(row.expense_id, [...(installments.get(row.expense_id) ?? []), {
     id: row.id, installment_number: row.installment_number, amount_cents: Number(row.amount_cents), due_date: row.due_date,
@@ -230,6 +252,62 @@ export async function listGroupExpenses(client: SupabaseClient, groupId: string)
   }])
   return expenses.map((expense) => ({ ...expense, amount_cents: Number(expense.amount_cents), rounding_remainder_cents: Number(expense.rounding_remainder_cents),
     shares: shares.get(expense.id) ?? [], installments: installments.get(expense.id) ?? [] })) as ExpenseRecord[]
+}
+
+export async function listGroupSettlements(client: SupabaseClient, groupId: string) {
+  const { data, error } = await client.from('group_settlements')
+    .select('id,group_id,created_by,paid_by,received_by,amount_cents,settlement_date,description,payment_method,created_at')
+    .eq('group_id', groupId).order('settlement_date', { ascending: false }).order('created_at', { ascending: false })
+  if (error) throw error
+  return (data ?? []).map((row) => ({ ...row, amount_cents: Number(row.amount_cents) })) as SettlementRecord[]
+}
+
+export async function createGroupSettlement(client: SupabaseClient, input: {
+  groupId: string
+  receivedBy: string
+  amountCents: number
+  settlementDate: string
+  paymentMethod: Exclude<SettlementPaymentMethod, 'splitwise'>
+}) {
+  if (!input.receivedBy) throw new Error('Escolha quem recebeu o pagamento.')
+  if (!Number.isSafeInteger(input.amountCents) || input.amountCents < 1) throw new Error('Informe um valor válido para o acerto.')
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input.settlementDate)) throw new Error('Informe uma data válida para o pagamento.')
+  const { data, error } = await client.rpc('create_group_settlement', {
+    p_group_id: input.groupId,
+    p_received_by: input.receivedBy,
+    p_amount_cents: input.amountCents,
+    p_settlement_date: input.settlementDate,
+    p_payment_method: input.paymentMethod,
+  })
+  if (error) throw new Error(error.message || `Falha ao registrar acerto (${error.code ?? 'erro desconhecido'}).`)
+  return data as string
+}
+
+export type SplitwiseImportExpense = {
+  source_key: string
+  description: string
+  category: ExpenseCategory
+  amount_cents: number
+  paid_by: string
+  expense_date: string
+  notes: string | null
+  shares: ExpenseShare[]
+}
+export type SplitwiseImportSettlement = {
+  source_key: string
+  paid_by: string
+  received_by: string
+  amount_cents: number
+  settlement_date: string
+  description: string
+}
+
+export async function importSplitwiseHistory(client: SupabaseClient, groupId: string, expenses: SplitwiseImportExpense[], settlements: SplitwiseImportSettlement[]) {
+  const { data, error } = await client.rpc('import_splitwise_history', {
+    p_group_id: groupId, p_expenses: expenses, p_settlements: settlements,
+  })
+  if (error) throw new Error(error.message || `Falha na importação (${error.code ?? 'erro desconhecido'}).`)
+  return data as { expenses_added: number; settlements_added: number; expenses_existing: number; settlements_existing: number }
 }
 
 function rpcValues(input: ExpenseInput) {

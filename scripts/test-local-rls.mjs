@@ -120,15 +120,33 @@ try {
     'função real do app normaliza o e-mail e permite convite a admin')
   const memberUser = await provisionUser(accounts.member)
   const memberSession = await signIn(accounts.member)
+  const memberSendClaim = await memberSession.client.rpc('claim_group_invitation_email', {
+    p_group_id: group1.id, p_invitation_id: createdInvitation.id,
+  })
+  assert(Boolean(memberSendClaim.error), 'membro sem papel admin não pode reivindicar envio de convite')
+  const { data: preAcceptMembership, error: preAcceptMembershipError } = await memberSession.client
+    .from('group_members').select('role').eq('group_id', group1.id).eq('user_id', memberUser.id)
+  if (preAcceptMembershipError) throw preAcceptMembershipError
+  assert(preAcceptMembership.length === 0,
+    'criar a conta Auth não associa a pessoa nem aceita o convite')
+  const wrongEmailAcceptance = await isolatedSession.client.rpc('accept_group_invitation', { p_invitation_id: createdInvitation.id })
+  assert(Boolean(wrongEmailAcceptance.error), 'convite não pode ser aceito por uma sessão com outro e-mail')
+  const pendingInbox = await memberSession.client.rpc('list_my_group_invitations')
+  assert(!pendingInbox.error && pendingInbox.data.some((invite) => invite.id === createdInvitation.id && invite.status === 'pending'),
+    'destinatário autenticado vê convite pendente antes de aceitar')
+  const acceptedGroup = await memberSession.client.rpc('accept_group_invitation', { p_invitation_id: createdInvitation.id })
+  assert(!acceptedGroup.error && acceptedGroup.data === group1.id,
+    'destinatário autenticado aceita convite destinado ao e-mail confirmado da sessão')
   const { data: memberMembership, error: memberMembershipError } = await memberSession.client
     .from('group_members').select('role').eq('group_id', group1.id).eq('user_id', memberUser.id).single()
   if (memberMembershipError) throw memberMembershipError
-  assert(memberMembership.role === 'member',
-    'criação da conta Auth com convite pendente associa somente o e-mail convidado como membro')
+  assert(memberMembership.role === 'member', 'aceite cria associação ativa com papel de membro')
 
-  await createGroupInvitation(adminSession.client, group1.id, accounts.member2.email)
+  const member2Invite = await createGroupInvitation(adminSession.client, group1.id, accounts.member2.email)
   const member2User = await provisionUser(accounts.member2)
   const member2Session = await signIn(accounts.member2)
+  const member2Acceptance = await member2Session.client.rpc('accept_group_invitation', { p_invitation_id: member2Invite.id })
+  assert(!member2Acceptance.error, 'segundo participante aceita o próprio convite')
   const { data: member2Membership, error: member2MembershipError } = await member2Session.client
     .from('group_members').select('role').eq('group_id', group1.id).eq('user_id', member2User.id).single()
   if (member2MembershipError) throw member2MembershipError
@@ -137,7 +155,7 @@ try {
   const { data: invitation, error: invitationReadError } = await adminSession.client
     .from('group_invitations').select('status').eq('group_id', group1.id).eq('invited_email', memberEmail).single()
   if (invitationReadError) throw invitationReadError
-  assert(invitation.status === 'accepted', 'trigger consome o convite pendente ao criar a conta Auth')
+  assert(invitation.status === 'accepted', 'convite muda para aceito somente depois do aceite autenticado')
   const { data: memberInvitations, error: memberInvitationsError } = await memberSession.client
     .from('group_invitations').select('id').eq('group_id', group1.id)
   if (memberInvitationsError) throw memberInvitationsError
@@ -480,6 +498,10 @@ try {
     p_group_id: group1.id, p_email: accounts.outsider.email, p_action: 'create', p_invitation_id: null,
   })
   assert(Boolean(duplicateInvite.error), 'convites duplicados ativos são recusados pelo servidor')
+  const directResend = await adminSession.client.rpc('manage_group_invitation', {
+    p_group_id: group1.id, p_email: '', p_action: 'resend', p_invitation_id: pendingForOutsider.id,
+  })
+  assert(Boolean(directResend.error), 'reenvio direto por RPC é recusado e exige a concessão da Edge Function')
   const outsiderAccept = await outsiderSession.client.rpc('accept_group_invitation', { p_invitation_id: pendingForOutsider.id })
   assert(!outsiderAccept.error && outsiderAccept.data === group1.id, 'destinatário autenticado aceita convite válido')
   const outsiderMembershipNow = await adminSession.client.from('group_members').select('active').eq('group_id', group1.id).eq('user_id', outsiderUser.id).single()
@@ -489,18 +511,49 @@ try {
   assert(Boolean(wrongInviteAccept.error), 'outra conta não aceita convite alheio')
   const invitationForIsolated = await createGroupInvitation(adminSession.client, group1.id, accounts.isolated.email)
   const firstExpiry = (await adminSession.client.from('group_invitations').select('expires_at').eq('id', invitationForIsolated.id).single()).data.expires_at
-  const resentInvite = await adminSession.client.rpc('manage_group_invitation', {
-    p_group_id: group1.id, p_email: '', p_action: 'resend', p_invitation_id: invitationForIsolated.id,
+  const claimFailureTest = await adminSession.client.rpc('claim_group_invitation_email', {
+    p_group_id: group1.id, p_invitation_id: invitationForIsolated.id,
+  })
+  const firstClaim = claimFailureTest.data?.[0]
+  assert(!claimFailureTest.error && Boolean(firstClaim?.claim_token), 'admin ativo obtém concessão temporária para enviar o convite')
+  const concurrentClaim = await adminSession.client.rpc('claim_group_invitation_email', {
+    p_group_id: group1.id, p_invitation_id: invitationForIsolated.id,
+  })
+  assert(Boolean(concurrentClaim.error), 'banco impede dois envios concorrentes do mesmo convite')
+  const failedDelivery = await admin.rpc('finish_group_invitation_email', {
+    p_invitation_id: invitationForIsolated.id, p_claim_token: firstClaim.claim_token, p_sent: false,
+  })
+  const afterFailure = await adminSession.client.from('group_invitations').select('status,expires_at,sending_token').eq('id', invitationForIsolated.id).single()
+  assert(!failedDelivery.error && afterFailure.data?.status === 'pending' && afterFailure.data.expires_at === firstExpiry && afterFailure.data.sending_token === null,
+    'falha de envio mantém status e validade e libera recuperação')
+  const retryClaim = await adminSession.client.rpc('claim_group_invitation_email', {
+    p_group_id: group1.id, p_invitation_id: invitationForIsolated.id,
+  })
+  const retryToken = retryClaim.data?.[0]?.claim_token
+  const successfulDelivery = await admin.rpc('finish_group_invitation_email', {
+    p_invitation_id: invitationForIsolated.id, p_claim_token: retryToken, p_sent: true,
   })
   const renewedInvite = await adminSession.client.from('group_invitations').select('status,expires_at').eq('id', invitationForIsolated.id).single()
-  assert(!resentInvite.error && renewedInvite.data?.status === 'pending' && renewedInvite.data.expires_at > firstExpiry,
-    'admin pode renovar convite pendente e estender a validade')
+  assert(!retryClaim.error && !successfulDelivery.error && renewedInvite.data?.status === 'sent' && renewedInvite.data.expires_at > firstExpiry,
+    'envio confirmado muda para enviado e renova a validade por 14 dias')
   const canceledInvite = await adminSession.client.rpc('manage_group_invitation', {
     p_group_id: group1.id, p_email: '', p_action: 'cancel', p_invitation_id: invitationForIsolated.id,
   })
   const canceledInbox = await isolatedSession.client.rpc('list_my_group_invitations')
   assert(!canceledInvite.error && canceledInbox.data.every((row) => row.id !== invitationForIsolated.id),
-    'admin cancela convite pendente e ele deixa de aparecer na caixa de entrada')
+    'admin cancela convite enviado e ele deixa de aparecer na caixa de entrada')
+  const canceledAcceptance = await isolatedSession.client.rpc('accept_group_invitation', { p_invitation_id: invitationForIsolated.id })
+  assert(Boolean(canceledAcceptance.error), 'convite cancelado não pode ser aceito')
+  const expiredInvitation = await createGroupInvitation(adminSession.client, group1.id, accounts.isolated.email)
+  await admin.from('group_invitations').update({ expires_at: new Date(Date.now() - 60_000).toISOString() }).eq('id', expiredInvitation.id)
+  const expiredInbox = await isolatedSession.client.rpc('list_my_group_invitations')
+  const expiredAcceptance = await isolatedSession.client.rpc('accept_group_invitation', { p_invitation_id: expiredInvitation.id })
+  const expiredSendClaim = await adminSession.client.rpc('claim_group_invitation_email', {
+    p_group_id: group1.id, p_invitation_id: expiredInvitation.id,
+  })
+  assert(expiredInbox.data?.some((row) => row.id === expiredInvitation.id && row.status === 'expired')
+    && Boolean(expiredAcceptance.error) && Boolean(expiredSendClaim.error),
+  'convite expirado é exibido como tal e falha no aceite e no novo envio')
 
   const memberEdit = await adminSession.client.rpc('update_group_member', {
     p_group_id: group1.id, p_user_id: memberUser.id, p_role: 'admin', p_display_name: 'Pessoa do grupo',

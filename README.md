@@ -36,9 +36,13 @@ VITE_SUPABASE_PUBLISHABLE_KEY=cole_a_chave_publicavel_localmente
 
 Após entrar, grupos, participantes, convites, despesas, saldos e sugestões de acerto usam o Supabase. Qualquer membro pode criar despesas; apenas admins podem editar ou excluir despesas. Saldos são calculados em centavos e sugestões não registram nem confirmam transferências. **Atenção:** o `.env.local` aponta para o projeto remoto `yzxeyqutmvjmrglmpcbb`; qualquer execução local do app com esse arquivo pode gravar nele. Para desenvolvimento sem tocar no remoto, inicie o Supabase local e use URL/chave locais; não use `.env.local` para testes.
 
-### Etapa local em revisão (2026-10-23)
+### Etapa publicada (2026-10-23)
 
-A implementação da próxima etapa está no workspace e validada contra o Supabase local. Ela ainda não foi publicada. O comportamento aprovado é:
+Esta versão foi publicada no GitHub Pages em 2026-10-23 pelo commit `6e72f3a`; o workflow `40022604851` concluiu com sucesso. O histórico remoto do Supabase confirma as migrations `20261023000100` a `20261023000800`, incluindo o acerto manual com forma de pagamento. As alterações incluem:
+
+- Fotos de perfil e capa dos grupos, gráficos de despesas por categoria com filtros de período e despesas agrupadas por mês.
+- Categoria Corrida, importação do histórico CSV do Splitwise e registro de acerto parcial com participante, valor, forma e data.
+- As funcionalidades aprovadas anteriormente para arquivamento de grupos, perfis, rateios e parcelas:
 
 - Qualquer participante pode arquivar ou restaurar um grupo. Admin do grupo ou criador pode excluí-lo definitivamente somente quando não houver despesas; grupos com histórico devem ser arquivados. A regra é aplicada por RPC autorizada no banco.
 - Cada perfil pode escolher um identificador de 3–24 letras ASCII, números ou `_`, normalizado para minúsculas, único sem diferenciar caixa e bloqueado para nomes reservados. A interface usa `@usuario` em participantes, saldos e acertos; o e-mail aparece na autenticação, na página da conta e nos convites.
@@ -46,7 +50,7 @@ A implementação da próxima etapa está no workspace e validada contra o Supab
 - Despesas podem ter 1–60 parcelas. O valor total é gravado uma vez, o cronograma fecha com ele e cada parcela afeta os saldos no mês do vencimento. O app mostra vencimentos e se a data passou; não registra pagamento de parcela.
 - A tela mostra saldos do mês atual e do período completo ao mesmo tempo, valor devedor líquido a acertar e totais mensais e acumulados por categoria, com filtro de categoria na lista.
 
-Migrations e asserções foram executadas somente no Supabase local; a migration `20261023000100_etapa_6_perfis_rateios_parcelas_e_grupos.sql` está ausente do histórico remoto. Em 2026-10-23, a consulta somente de leitura ao histórico remoto confirmou que 001/002/004/005 estão aplicadas no projeto `yzxeyqutmvjmrglmpcbb` (SplitUai, São Paulo). Não houve `db push`, envio de convite, alteração remota, push ou publicação. A fase de release precisa aplicar o banco primeiro e confirmar o histórico remoto antes de publicar o frontend.
+As migrations `20261023000100` a `20261023000800` constam no histórico remoto do projeto `yzxeyqutmvjmrglmpcbb` (SplitUai, São Paulo). O release foi publicado após essa conferência; nenhuma migration nova foi necessária.
 
 ## Publicação
 
@@ -115,4 +119,4 @@ Histórico de checks anteriores: 37 verificações cobriam grupos e despesas ant
 - Etapas 0 e 1 concluídas; protótipo publicado em <https://jotachina.github.io/SplitUai/>.
 - Etapa 2 aplicada e validada inicialmente: schema/RLS, Auth por convite e login/sessão implementados localmente. `.env.local` aponta para o projeto correto e contém uma chave publicável; a tela de login local abriu. A correção do trigger foi aplicada, o fluxo de convite foi concluído e o titular confirmou que o login funcionou no GitHub Pages. O Site URL de GitHub Pages foi restaurado.
 - Etapas 4 e 5 foram publicadas. Migrations 004/005 foram aplicadas primeiro no Supabase São Paulo pela integração GitHub; depois, `b447871` publicou o frontend via Pages. Build Vite e 37 verificações de autorização, despesas, saldos e sugestões passaram localmente. A página publicada respondeu HTTP 200 e seu bundle contém a interface de saldos e sugestões.
-- O workflow `37722182113` do commit `5122a6d` concluiu com sucesso e o Pages está servindo a correção da busca pós-criação de grupo. O ciclo seguro atual está somente no workspace, ainda sem migration ou deploy em produção.
+- O commit `6e72f3a` foi publicado pelo workflow `40022604851` (build e deploy concluídos). A URL pública respondeu HTTP 200 e o bundle contém os fluxos de acerto, importação Splitwise e a categoria Corrida. O workflow usa as variáveis `VITE_SUPABASE_URL` e `VITE_SUPABASE_PUBLISHABLE_KEY` do ambiente GitHub `SplitUai`, conferidas sem exibir seus valores. Nenhuma migration nova foi necessária: o histórico remoto já continha as versões 001–008.

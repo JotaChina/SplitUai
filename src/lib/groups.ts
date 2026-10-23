@@ -6,6 +6,7 @@ export type GroupRecord = {
   description: string | null
   created_by: string | null
   created_at: string
+  archived_at: string | null
 }
 
 export type GroupMemberRecord = {
@@ -18,6 +19,7 @@ export type GroupMemberRecord = {
 export type GroupProfileRecord = {
   id: string
   display_name: string | null
+  username: string | null
 }
 
 export type GroupInvitationRecord = {
@@ -30,12 +32,13 @@ export type GroupInvitationRecord = {
 
 export type GroupMemberView = GroupMemberRecord & {
   display_name: string | null
+  username: string | null
 }
 
 export async function listMyGroups(client: SupabaseClient) {
   const { data, error } = await client
     .from('groups')
-    .select('id, name, description, created_by, created_at')
+    .select('id, name, description, created_by, created_at, archived_at')
     .order('created_at', { ascending: false })
 
   if (error) throw error
@@ -67,7 +70,7 @@ export async function createGroup(
 
   const query = client
     .from('groups')
-    .select('id, name, description, created_by, created_at')
+    .select('id, name, description, created_by, created_at, archived_at')
     .eq('created_by', userId)
     .eq('name', name)
     .order('created_at', { ascending: false })
@@ -89,7 +92,7 @@ export async function updateGroup(
     .from('groups')
     .update({ name: values.name.trim(), description: values.description.trim() || null })
     .eq('id', groupId)
-    .select('id, name, description, created_by, created_at')
+    .select('id, name, description, created_by, created_at, archived_at')
     .single()
 
   if (error) throw error
@@ -109,7 +112,7 @@ export async function getGroupMembers(client: SupabaseClient, groupId: string) {
 
   const { data: profileRows, error: profileError } = await client
     .from('profiles')
-    .select('id, display_name')
+    .select('id, display_name, username')
     .in('id', members.map((member) => member.user_id))
 
   if (profileError) throw profileError
@@ -118,7 +121,24 @@ export async function getGroupMembers(client: SupabaseClient, groupId: string) {
   return members.map((member) => ({
     ...member,
     display_name: profiles.get(member.user_id)?.display_name ?? null,
+    username: profiles.get(member.user_id)?.username ?? null,
   }))
+}
+
+export async function setMyUsername(client: SupabaseClient, username: string) {
+  const { data, error } = await client.rpc('set_my_username', { p_username: username })
+  if (error) throw error
+  return data as string
+}
+
+export async function setGroupArchived(client: SupabaseClient, groupId: string, archived: boolean) {
+  const { error } = await client.rpc('set_group_archived', { p_group_id: groupId, p_archived: archived })
+  if (error) throw error
+}
+
+export async function deleteEmptyGroup(client: SupabaseClient, groupId: string) {
+  const { error } = await client.rpc('delete_empty_group', { p_group_id: groupId })
+  if (error) throw error
 }
 
 export async function listGroupInvitations(client: SupabaseClient, groupId: string) {

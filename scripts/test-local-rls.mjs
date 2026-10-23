@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process'
 import { createClient } from '@supabase/supabase-js'
 import { createGroup, createGroupInvitation } from '../src/lib/groups.ts'
-import { calculateBalances, createExpense, deleteExpense, listGroupExpenses, splitEvenly, suggestSettlements, updateExpense } from '../src/lib/expenses.ts'
+import { allocatePercentage, calculateBalances, createExpense, deleteExpense, generateMonthlySchedule, listGroupExpenses, splitEvenly, suggestSettlements, updateExpense } from '../src/lib/expenses.ts'
 
 const apiUrl = process.env.API_URL
 const anonKey = process.env.ANON_KEY
@@ -36,6 +36,7 @@ const results = []
 function assert(condition, message) {
   if (!condition) throw new Error(`FAIL: ${message}`)
   results.push(`PASS: ${message}`)
+  console.log(`PASS: ${message}`)
 }
 
 function userClient() {
@@ -159,26 +160,120 @@ try {
   if (outsiderMembershipError) throw outsiderMembershipError
   assert(outsiderOwnMembership.role === 'admin', 'criador do segundo grupo também recebe papel admin')
 
+  const usernameSet = await adminSession.client.rpc('set_my_username', { p_username: ' Ana_Parte ' })
+  assert(usernameSet.data === 'ana_parte' && !usernameSet.error, 'identificador é normalizado para minúsculas e espaços externos são removidos')
+  const duplicateUsername = await memberSession.client.rpc('set_my_username', { p_username: 'ANA_PARTE' })
+  assert(Boolean(duplicateUsername.error), 'identificador duplicado sem diferenciar maiúsculas é recusado')
+  const reservedUsername = await memberSession.client.rpc('set_my_username', { p_username: 'admin' })
+  assert(Boolean(reservedUsername.error), 'identificador reservado é recusado pelo banco')
+  const invalidUsername = await memberSession.client.rpc('set_my_username', { p_username: 'ab!' })
+  assert(Boolean(invalidUsername.error), 'identificador fora do formato e tamanho permitidos é recusado')
+  const { data: peerProfile, error: peerProfileError } = await memberSession.client.from('profiles')
+    .select('username').eq('id', adminUser.id).single()
+  if (peerProfileError) throw peerProfileError
+  assert(peerProfile.username === 'ana_parte', 'membro consulta o @ público de colega do grupo sem consultar e-mail')
+  const { data: noUsernameProfile, error: noUsernameError } = await memberSession.client.from('profiles')
+    .select('username').eq('id', memberUser.id).single()
+  if (noUsernameError) throw noUsernameError
+  assert(noUsernameProfile.username === null, 'perfil ainda sem identificador é retornado sem expor e-mail')
+  const { data: forbiddenProfileUpdate, error: forbiddenProfileError } = await adminSession.client.from('profiles')
+    .update({ username: 'hijack_name' }).eq('id', memberUser.id).select('id')
+  assert(Boolean(forbiddenProfileError) || !forbiddenProfileUpdate?.length, 'usuário não altera identificador de outra pessoa por escrita direta')
+  const unauthorizedProfile = await outsiderSession.client.rpc('set_my_username', { p_username: 'admin_other' })
+  assert(!unauthorizedProfile.error, 'usuário pode escolher o próprio identificador mesmo fora do grupo')
+  const { data: selfProfile, error: selfProfileError } = await outsiderSession.client.from('profiles')
+    .select('username').eq('id', outsiderUser.id).single()
+  if (selfProfileError) throw selfProfileError
+  assert(selfProfile.username === 'admin_other', 'usuário lê seu identificador mesmo sem grupo compartilhado')
+
   const memberIds = [adminUser.id, memberUser.id, member2User.id]
   const sharesFor = (amountCents, ids = memberIds) => splitEvenly(amountCents, ids)
-  const initialShares = sharesFor(1001)
-  assert(initialShares.reduce((sum, share) => sum + share.amount_cents, 0) === 1001
-    && initialShares.map((share) => share.amount_cents).join(',') === '334,334,333',
-  'divisão de 1001 centavos entre três pessoas distribui os restos e fecha o total')
-  const createdExpenseId = await createExpense(adminSession.client, group1.id, {
-    description: `${prefix} almoço`, category: 'alimentacao', amountCents: 1001,
-    paidBy: adminUser.id, expenseDate: '2026-10-08', notes: '', shares: initialShares,
+  const scheduleFor = (amountCents, split, count = 1, due = '2026-10-08') => generateMonthlySchedule(amountCents, count, due, split.shares, split.remainderCents)
+  const expenseValues = (amountCents, split, overrides = {}) => ({
+    description: `${prefix} despesa`, category: 'outros', amountCents, paidBy: adminUser.id,
+    expenseDate: '2026-10-08', notes: '', splitMode: 'equal', roundingRemainderCents: split.remainderCents,
+    shares: split.shares, installments: scheduleFor(amountCents, split), ...overrides,
   })
+  const initialSplit = sharesFor(1001)
+  assert(initialSplit.shares.reduce((sum, share) => sum + share.amount_cents, 0) + initialSplit.remainderCents === 1001
+    && initialSplit.shares.map((share) => share.amount_cents).join(',') === '333,333,333' && initialSplit.remainderCents === 2,
+  'divisão igual deixa todos com 333 centavos e registra o resto no pagador')
+  const exampleSplit = sharesFor(2234)
+  assert(exampleSplit.shares.every((share) => share.amount_cents === 744) && exampleSplit.remainderCents === 2,
+    'R$ 22,34 para três pessoas mostra R$ 7,44 por pessoa e ajuste de R$ 0,02')
+  const tinySplit = sharesFor(1)
+  assert(tinySplit.shares.every((share) => share.amount_cents === 0) && tinySplit.remainderCents === 1,
+    'rateio menor que um centavo por pessoa deixa o restante integralmente com o pagador')
+  const tinyExpenseId = await createExpense(adminSession.client, group1.id, expenseValues(1, tinySplit, {
+    description: `${prefix} um centavo`, category: 'outros',
+  }))
+  const tinyRows = await listGroupExpenses(memberSession.client, group1.id)
+  assert(calculateBalances(tinyRows.filter((row) => row.id === tinyExpenseId), memberIds).every((row) => row.balance_cents === 0),
+    'RPC aceita ajuste igual ao total da despesa e mantém saldos em zero')
+  await deleteExpense(adminSession.client, tinyExpenseId)
+  const percentageShares = allocatePercentage(1001, { [adminUser.id]: 50, [memberUser.id]: 25, [member2User.id]: 25 })
+  assert(percentageShares.reduce((sum, share) => sum + share.amount_cents, 0) === 1001,
+    'rateio percentual distribui restos pelo maior resto fracionário e fecha o total')
+  const percentExpenseId = await createExpense(adminSession.client, group1.id, expenseValues(1001,
+    { shares: percentageShares, remainderCents: 0 }, { description: `${prefix} percentual`, category: 'atividades', splitMode: 'percentage' }))
+  const percentRows = await listGroupExpenses(memberSession.client, group1.id)
+  const percentExpense = percentRows.find((row) => row.id === percentExpenseId)
+  assert(percentExpense?.split_mode === 'percentage'
+    && percentExpense.shares.reduce((sum, share) => sum + share.amount_cents, 0) === 1001
+    && percentExpense.shares.every((share) => share.percentage != null),
+  'RPC valida e persiste divisão percentual e percentuais usados')
+  await deleteExpense(adminSession.client, percentExpenseId)
+  const customShares = [{ user_id: adminUser.id, amount_cents: 500 }, { user_id: memberUser.id, amount_cents: 501 }]
+  const customSplit = { shares: customShares, remainderCents: 0 }
+  const customExpenseId = await createExpense(adminSession.client, group1.id, expenseValues(1001, customSplit, {
+    description: `${prefix} personalizado`, category: 'outros', splitMode: 'custom',
+  }))
+  const customRows = await listGroupExpenses(memberSession.client, group1.id)
+  assert(customRows.find((row) => row.id === customExpenseId)?.shares.reduce((sum, share) => sum + share.amount_cents, 0) === 1001,
+    'RPC grava valores personalizados que fecham exatamente com o total')
+  await deleteExpense(adminSession.client, customExpenseId)
+  const invalidPercentage = await adminSession.client.rpc('create_expense_with_schedule', {
+    p_group_id: group1.id, p_description: 'percentuais inválidos', p_category: 'outros', p_amount_cents: 100,
+    p_paid_by: adminUser.id, p_expense_date: '2026-10-08', p_notes: null, p_split_mode: 'percentage', p_rounding_remainder_cents: 0,
+    p_shares: [{ user_id: adminUser.id, amount_cents: 100, percentage: 99 }],
+    p_installments: [{ installment_number: 1, amount_cents: 100, due_date: '2026-10-08', shares: [{ user_id: adminUser.id, amount_cents: 100 }] }],
+  })
+  assert(Boolean(invalidPercentage.error), 'RPC recusa percentuais que não somam 100%')
+  const createdExpenseId = await createExpense(adminSession.client, group1.id, expenseValues(1001, initialSplit, {
+    description: `${prefix} almoço`, category: 'alimentacao',
+  }))
   const memberExpenses = await listGroupExpenses(memberSession.client, group1.id)
   const createdExpense = memberExpenses.find((expense) => expense.id === createdExpenseId)
-  assert(createdExpense?.shares.reduce((total, share) => total + share.amount_cents, 0) === createdExpense?.amount_cents
-    && createdExpense?.shares.length === 3,
-  'membro autorizado lê a despesa compartilhada e as parcelas fecham o total')
+  assert(createdExpense?.shares.reduce((total, share) => total + share.amount_cents, 0) + createdExpense?.rounding_remainder_cents === createdExpense?.amount_cents
+    && createdExpense?.shares.length === 3 && createdExpense.installments.length === 1,
+  'membro lê a despesa, o ajuste e seu cronograma de uma parcela')
 
-  const secondExpenseId = await createExpense(memberSession.client, group1.id, {
-    description: `${prefix} transporte`, category: 'transporte', amountCents: 1000,
-    paidBy: memberUser.id, expenseDate: '2026-10-08', notes: '', shares: sharesFor(1000),
-  })
+  const installmentSplit = sharesFor(1001)
+  const installmentExpenseId = await createExpense(adminSession.client, group1.id, expenseValues(1001, installmentSplit, {
+    description: `${prefix} parcelas`, category: 'hospedagem',
+    installments: scheduleFor(1001, installmentSplit, 3, '2026-10-08'),
+  }))
+  const installmentRows = await listGroupExpenses(memberSession.client, group1.id)
+  const installmentExpense = installmentRows.find((expense) => expense.id === installmentExpenseId)
+  assert(installmentExpense?.installments.length === 3
+    && installmentExpense.installments.reduce((sum, item) => sum + item.amount_cents, 0) === 1001
+    && installmentExpense.installments.map((item) => item.due_date.slice(0, 7)).join(',') === '2026-10,2026-11,2026-12',
+  'cronograma de três parcelas valida soma e vencimentos mensais')
+  const octoberBalances = calculateBalances(installmentRows.filter((row) => row.id === installmentExpenseId), memberIds, '2026-10')
+  const novemberBalances = calculateBalances(installmentRows.filter((row) => row.id === installmentExpenseId), memberIds, '2026-11')
+  const decemberBalances = calculateBalances(installmentRows.filter((row) => row.id === installmentExpenseId), memberIds, '2026-12')
+  assert(octoberBalances.reduce((sum, row) => sum + row.balance_cents, 0) === 0
+    && novemberBalances.reduce((sum, row) => sum + row.balance_cents, 0) === 0
+    && decemberBalances.reduce((sum, row) => sum + row.balance_cents, 0) === 0
+    && calculateBalances([installmentExpense], memberIds).reduce((sum, row) => sum + row.balance_cents, 0) === 0,
+  'cada parcela afeta somente seu mês de vencimento e todos os saldos fecham em zero')
+  const outsiderInstallments = await outsiderSession.client.from('expense_installments').select('id').eq('expense_id', installmentExpenseId)
+  assert(!outsiderInstallments.error && outsiderInstallments.data.length === 0, 'usuário de fora não consulta o cronograma')
+  await deleteExpense(adminSession.client, installmentExpenseId)
+
+  const secondExpenseId = await createExpense(memberSession.client, group1.id, expenseValues(1000, sharesFor(1000), {
+    description: `${prefix} transporte`, category: 'transporte', paidBy: memberUser.id,
+  }))
   const group1Rows = await listGroupExpenses(member2Session.client, group1.id)
   let balances = calculateBalances(group1Rows, memberIds)
   assert(balances.find((balance) => balance.user_id === adminUser.id)?.balance_cents === 333
@@ -197,56 +292,80 @@ try {
     .select('id')
   assert(Boolean(directExpenseError) || !directExpenseInsert?.length,
     'INSERT direto em expenses permanece bloqueado')
+  const legacyCreate = await adminSession.client.rpc('create_expense_with_shares', {
+    p_group_id: group1.id, p_description: 'RPC antiga', p_category: 'outros', p_amount_cents: 100,
+    p_paid_by: adminUser.id, p_expense_date: '2026-10-08', p_notes: null,
+    p_shares: [{ user_id: adminUser.id, amount_cents: 100 }],
+  })
+  assert(Boolean(legacyCreate.error), 'RPC legada sem cronograma foi revogada')
   const outsiderExpenses = await listGroupExpenses(outsiderSession.client, group1.id)
   assert(outsiderExpenses.length === 0, 'usuário de outro grupo não lista despesas nem parcelas')
 
-  const invalidParticipant = await adminSession.client.rpc('create_expense_with_shares', {
+  const invalidParticipant = await adminSession.client.rpc('create_expense_with_schedule', {
     p_group_id: group1.id, p_description: 'participante inválido', p_category: 'outros',
-    p_amount_cents: 100, p_paid_by: adminUser.id, p_expense_date: '2026-10-08', p_notes: null,
+    p_amount_cents: 100, p_paid_by: adminUser.id, p_expense_date: '2026-10-08', p_notes: null, p_split_mode: 'custom', p_rounding_remainder_cents: 0,
     p_shares: [{ user_id: outsiderUser.id, amount_cents: 100 }],
+    p_installments: [{ installment_number: 1, amount_cents: 100, due_date: '2026-10-08', shares: [{ user_id: outsiderUser.id, amount_cents: 100 }] }],
   })
   assert(Boolean(invalidParticipant.error), 'RPC recusa participante que pertence a outro grupo')
-  const invalidAmount = await adminSession.client.rpc('create_expense_with_shares', {
+  const invalidAmount = await adminSession.client.rpc('create_expense_with_schedule', {
     p_group_id: group1.id, p_description: 'valor inválido', p_category: 'outros',
-    p_amount_cents: -1, p_paid_by: adminUser.id, p_expense_date: '2026-10-08', p_notes: null,
+    p_amount_cents: -1, p_paid_by: adminUser.id, p_expense_date: '2026-10-08', p_notes: null, p_split_mode: 'custom', p_rounding_remainder_cents: 0,
     p_shares: [{ user_id: adminUser.id, amount_cents: 1 }],
+    p_installments: [{ installment_number: 1, amount_cents: 1, due_date: '2026-10-08', shares: [{ user_id: adminUser.id, amount_cents: 1 }] }],
   })
   assert(Boolean(invalidAmount.error), 'RPC recusa valor nulo/zero/negativo ou fora do limite')
-  const invalidTotal = await adminSession.client.rpc('create_expense_with_shares', {
+  const invalidTotal = await adminSession.client.rpc('create_expense_with_schedule', {
     p_group_id: group1.id, p_description: 'total inválido', p_category: 'outros',
-    p_amount_cents: 100, p_paid_by: adminUser.id, p_expense_date: '2026-10-08', p_notes: null,
+    p_amount_cents: 100, p_paid_by: adminUser.id, p_expense_date: '2026-10-08', p_notes: null, p_split_mode: 'custom', p_rounding_remainder_cents: 0,
     p_shares: [{ user_id: adminUser.id, amount_cents: 99 }],
+    p_installments: [{ installment_number: 1, amount_cents: 100, due_date: '2026-10-08', shares: [{ user_id: adminUser.id, amount_cents: 100 }] }],
   })
   assert(Boolean(invalidTotal.error), 'RPC recusa parcelas cuja soma não fecha o total')
+  const invalidCustomRemainder = await adminSession.client.rpc('create_expense_with_schedule', {
+    p_group_id: group1.id, p_description: 'custom com resto inválido', p_category: 'outros', p_amount_cents: 100,
+    p_paid_by: adminUser.id, p_expense_date: '2026-10-08', p_notes: null, p_split_mode: 'custom', p_rounding_remainder_cents: 1,
+    p_shares: [{ user_id: adminUser.id, amount_cents: 99 }],
+    p_installments: [{ installment_number: 1, amount_cents: 100, due_date: '2026-10-08', shares: [{ user_id: adminUser.id, amount_cents: 99 }] }],
+  })
+  assert(Boolean(invalidCustomRemainder.error), 'RPC exige que valores personalizados fechem sem resto')
 
-  const updatedShares = sharesFor(1005)
-  const forbiddenMemberEdit = await memberSession.client.rpc('update_expense_with_shares', {
+  const updatedSplit = sharesFor(1005)
+  const updatedShares = updatedSplit.shares
+  const updatedInstallments = scheduleFor(1005, updatedSplit, 2, '2026-10-07')
+  const forbiddenMemberEdit = await memberSession.client.rpc('update_expense_with_schedule', {
     p_expense_id: createdExpenseId, p_description: 'edição de membro recusada', p_category: 'outros',
-    p_amount_cents: 1005, p_paid_by: memberUser.id, p_expense_date: '2026-10-07', p_notes: null,
+    p_amount_cents: 1005, p_paid_by: memberUser.id, p_expense_date: '2026-10-07', p_notes: null, p_split_mode: 'equal', p_rounding_remainder_cents: updatedSplit.remainderCents,
     p_shares: updatedShares,
+    p_installments: updatedInstallments,
   })
   assert(Boolean(forbiddenMemberEdit.error), 'membro comum não edita despesa por RPC')
   const forbiddenMemberDelete = await memberSession.client.rpc('delete_expense', { p_expense_id: createdExpenseId })
   assert(Boolean(forbiddenMemberDelete.error), 'membro comum não exclui despesa por RPC')
-  await updateExpense(adminSession.client, createdExpenseId, {
-    description: `${prefix} almoço editado`, category: 'atividades', amountCents: 1005,
-    paidBy: member2User.id, expenseDate: '2026-10-07', notes: 'edição autorizada', shares: updatedShares,
-  })
+  await updateExpense(adminSession.client, createdExpenseId, expenseValues(1005, updatedSplit, {
+    description: `${prefix} almoço editado`, category: 'atividades', paidBy: member2User.id,
+    expenseDate: '2026-10-07', notes: 'edição autorizada', installments: updatedInstallments,
+  }))
   const updatedRows = await listGroupExpenses(adminSession.client, group1.id)
   const updatedExpense = updatedRows.find((expense) => expense.id === createdExpenseId)
   assert(updatedExpense?.description.endsWith('almoço editado') && updatedExpense.paid_by === member2User.id
-    && updatedExpense.shares.reduce((total, share) => total + share.amount_cents, 0) === 1005,
-  'admin edita os campos e parcelas em uma operação atômica')
+    && updatedExpense.shares.reduce((total, share) => total + share.amount_cents, 0) + updatedExpense.rounding_remainder_cents === 1005
+    && updatedExpense.installments.length === 2,
+  'admin edita campos, rateio e cronograma em uma operação atômica')
 
   balances = calculateBalances(updatedRows, memberIds)
   assert(balances.reduce((sum, balance) => sum + balance.balance_cents, 0) === 0
-    && balances.find((balance) => balance.user_id === adminUser.id)?.balance_cents === -669,
+    && balances.find((balance) => balance.user_id === adminUser.id)?.balance_cents === -668,
   'edição atualiza os saldos com o novo pagador e divisão')
+  assert(calculateBalances(updatedRows, memberIds, '2026-10').reduce((sum, row) => sum + row.balance_cents, 0) === 0
+    && calculateBalances(updatedRows, memberIds, '2026-11').reduce((sum, row) => sum + row.balance_cents, 0) === 0,
+  'edição recalcula saldos mensais a partir do novo cronograma')
 
-  const forbiddenEdit = await outsiderSession.client.rpc('update_expense_with_shares', {
+  const forbiddenEdit = await outsiderSession.client.rpc('update_expense_with_schedule', {
     p_expense_id: createdExpenseId, p_description: 'edição externa', p_category: 'outros',
-    p_amount_cents: 1005, p_paid_by: adminUser.id, p_expense_date: '2026-10-07', p_notes: null,
+    p_amount_cents: 1005, p_paid_by: adminUser.id, p_expense_date: '2026-10-07', p_notes: null, p_split_mode: 'equal', p_rounding_remainder_cents: updatedSplit.remainderCents,
     p_shares: updatedShares,
+    p_installments: updatedInstallments,
   })
   assert(Boolean(forbiddenEdit.error), 'usuário de outro grupo não edita a despesa')
   const forbiddenDelete = await outsiderSession.client.rpc('delete_expense', { p_expense_id: createdExpenseId })
@@ -262,11 +381,37 @@ try {
     .insert({ expense_id: createdExpenseId, group_id: group1.id, user_id: adminUser.id, amount_cents: 1005 })
   assert(Boolean(directShareError), 'INSERT direto em expense_shares permanece bloqueado')
 
+  const deleteWithExpenses = await adminSession.client.rpc('delete_empty_group', { p_group_id: group1.id })
+  assert(Boolean(deleteWithExpenses.error), 'admin não exclui grupo que possui histórico de despesas')
+  const outsiderDeleteGroup = await outsiderSession.client.rpc('delete_empty_group', { p_group_id: group1.id })
+  assert(Boolean(outsiderDeleteGroup.error), 'pessoa sem acesso não exclui grupo por RPC')
+
   await deleteExpense(adminSession.client, secondExpenseId)
   await deleteExpense(adminSession.client, createdExpenseId)
   const emptyExpenses = await listGroupExpenses(adminSession.client, group1.id)
   assert(emptyExpenses.length === 0 && calculateBalances(emptyExpenses, memberIds).every((balance) => balance.balance_cents === 0),
     'excluir despesas e parcelas restaura saldo zero para todos os participantes')
+
+  const unauthorizedArchive = await outsiderSession.client.rpc('set_group_archived', { p_group_id: group1.id, p_archived: true })
+  assert(Boolean(unauthorizedArchive.error), 'pessoa sem acesso não arquiva grupo por RPC')
+  const memberArchive = await memberSession.client.rpc('set_group_archived', { p_group_id: group1.id, p_archived: true })
+  assert(!memberArchive.error, 'qualquer participante pode arquivar o grupo por RPC')
+  const directArchiveUpdate = await memberSession.client.from('groups').update({ archived_at: null }).eq('id', group1.id).select('id')
+  assert(Boolean(directArchiveUpdate.error) || !directArchiveUpdate.data?.length, 'membro não altera arquivo por escrita direta na tabela')
+  const { data: archivedGroup, error: archivedGroupError } = await memberSession.client.from('groups').select('archived_at').eq('id', group1.id).single()
+  if (archivedGroupError) throw archivedGroupError
+  assert(Boolean(archivedGroup.archived_at), 'grupo arquivado permanece consultável com dados preservados')
+  const restoreGroup = await adminSession.client.rpc('set_group_archived', { p_group_id: group1.id, p_archived: false })
+  assert(!restoreGroup.error, 'membro pode restaurar grupo arquivado')
+  const emptyGroup = await createGroup(adminSession.client, adminUser.id, { name: `${prefix} empty`, description: '' })
+  const { error: addFixtureMemberError } = await admin.from('group_members').insert({ group_id: emptyGroup.id, user_id: memberUser.id, role: 'member' })
+  if (addFixtureMemberError) throw addFixtureMemberError
+  const memberDelete = await memberSession.client.rpc('delete_empty_group', { p_group_id: emptyGroup.id })
+  assert(Boolean(memberDelete.error), 'membro sem papel admin não exclui grupo vazio por RPC')
+  const directGroupDelete = await memberSession.client.from('groups').delete().eq('id', emptyGroup.id).select('id')
+  assert(Boolean(directGroupDelete.error) || !directGroupDelete.data?.length, 'DELETE direto em groups continua bloqueado')
+  const creatorDelete = await adminSession.client.rpc('delete_empty_group', { p_group_id: emptyGroup.id })
+  assert(!creatorDelete.error, 'criador/admin pode excluir definitivamente grupo vazio')
 
   const { data: outsiderRead, error: outsiderReadError } = await outsiderSession.client
     .from('groups').select('id').eq('id', group1.id).maybeSingle()
@@ -325,7 +470,6 @@ try {
 
   assert(group2.id !== group1.id && isolatedUser.id !== adminUser.id,
     'contas e grupos de teste são independentes')
-  console.log(results.join('\n'))
   console.log(`Concluído: ${results.length} verificações locais passaram.`)
 } finally {
   await cleanup()

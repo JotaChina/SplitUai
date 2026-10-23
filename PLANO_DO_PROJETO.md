@@ -211,7 +211,23 @@ Na revisão inicial, as funções auxiliares `is_current_user_group_member`, `is
 - **Sequência de publicação concluída:** fase 1: commit somente de migrations `8594f99`; a integração Supabase aplicou 004/005 e o histórico remoto foi confirmado. O Pages workflow `37874029710` publicou o frontend anterior. Fase 2: commit `b447871` publicou interface e documentação sem migrations pendentes; Pages workflow `37874511350` concluiu com sucesso. A página pública respondeu HTTP 200 e o bundle contém os textos de saldo e sugestões de acerto. A atualização deste registro de resultado será publicada separadamente, sem alterações de banco.
 - **Limitação atual:** não há ambiente de preview Supabase separado disponível para validar as migrations remotamente sem atingir produção. As sugestões de acerto são calculadas no navegador sobre despesas que todos os membros podem ler e não são lançamentos de liquidação.
 
-### Etapa 6 — Acabamento e entrega
+### Etapa 6 — Grupos, identificadores, rateios e parcelas (2026-10-23)
+
+- [x] Adicionar arquivamento/restauração para qualquer participante e exclusão definitiva por admin/criador somente quando não houver despesas.
+- [x] Criar identificador público `@usuario`, normalizado e único sem diferenciar maiúsculas/minúsculas, com validação e nomes reservados no banco.
+- [x] Adicionar divisão igual, percentual e por valor definido, com prévia e validação/gravação atômicas em RPC.
+- [x] Adicionar cronograma de 1–60 parcelas sem duplicar o total; cada parcela afeta o saldo no mês do vencimento.
+- [x] Mostrar simultaneamente saldos do mês atual e do período completo, total devedor líquido e despesas por categoria.
+- [x] Testar no Supabase local autorização por admin/membro/pessoa externa, entradas inválidas, centavos restantes, cronogramas, edição/exclusão, isolamento e saldos zero.
+- [x] Atualizar README e plano; comparar o histórico local e remoto em modo somente leitura antes da liberação.
+
+**Decisões aprovadas:** qualquer participante pode arquivar/restaurar; só admin do grupo ou criador exclui definitivamente, e apenas grupo sem despesas. Rateio igual arredonda para baixo e deixa o restante com o pagador, mostrado como ajuste. Percentuais usam maiores restos fracionários (desempate por ID do usuário); valores personalizados precisam fechar exatamente. Parcelas entram no mês do vencimento. “Quanto falta” significa a soma líquida devedora ainda não acertada.
+
+**Estado:** migration `20261023000100_etapa_6_perfis_rateios_parcelas_e_grupos.sql` aplicada e testada no Supabase local. A build com Node 24 passou e 69 verificações locais passaram em 2026-10-23. O histórico remoto foi consultado somente para leitura no projeto `yzxeyqutmvjmrglmpcbb` e ainda não contém 006; nenhuma mudança de produção ou publicação foi feita. As fixtures de teste foram removidas. A interface mostra estado de vencimento (“A vencer”/“Vencimento passado”), mas não rastreia pagamentos das parcelas. O ajuste do rateio igual é contabilizado no saldo do pagador para manter a soma de saldos em zero.
+
+**Plano de publicação:** fase 1, revisar o diff e autorizar um commit apenas da migration; deixar a integração GitHub aplicar a migration no projeto SplitUai de São Paulo e conferir o histórico remoto. Não executar `db push`. Fase 2, depois de confirmar o banco, autorizar um commit separado do frontend e da documentação para o Pages. Ambos os passos aguardam autorização; Virginia (`ipbnqofmggytdkgmadtc`) permanece intocada.
+
+### Etapa 7 — Acabamento e entrega
 
 - [ ] Tratar estados de carregamento, erro, lista vazia e sessão expirada.
 - [ ] Verificar uso em telas pequenas e acessibilidade básica.
@@ -222,10 +238,10 @@ Na revisão inicial, as funções auxiliares `is_current_user_group_member`, `is
 
 ## Andamento atual
 
-- **Status:** Etapas 0–5 publicadas. Build e 37 verificações de RLS/despesas/saldos passaram no Supabase local. Migrations 004/005 foram aplicadas no banco de São Paulo antes do frontend; a publicação frontend `b447871` passou no Pages workflow `37874511350`. A página responde HTTP 200 e serve o bundle novo. Seguem pendentes os testes de convites expirados/revogados e de usuários Auth preexistentes.
-- **Projeto alvo (2026-10-08):** `yzxeyqutmvjmrglmpcbb`, SplitUai, São Paulo (`sa-east-1`). O projeto Virginia `ipbnqofmggytdkgmadtc` permanece intocado. GitHub `JotaChina/SplitUai`, produção em `main`; integração Supabase aplica migrations ao push e Pages também publica no push. Histórico confirmado após o commit `8594f99`: 001/002/004/005 aplicadas remoto/local. Nenhum `db push` foi executado.
+- **Status (2026-10-23):** Etapas 0–5 seguem publicadas. Etapa 6 implementada e validada localmente; aguardando revisão antes de qualquer publicação. A migration 006 consta no Supabase local e ainda não no remoto. Build Node 24 aprovada e 69 verificações locais registradas acima. Não houve `db push`, push Git, convite ou deploy nesta etapa.
+- **Projeto alvo (confirmado em 2026-10-23):** `yzxeyqutmvjmrglmpcbb`, SplitUai, São Paulo (`sa-east-1`). Histórico remoto consultado somente para leitura: 001/002/004/005 aplicadas; 006 somente local. O projeto Virginia `ipbnqofmggytdkgmadtc` permanece intocado. GitHub `JotaChina/SplitUai`, produção em `main`; integração Supabase aplica migrations ao push e Pages também publica no push, então a liberação precisa separar banco e frontend.
 - **Banco e Auth:** aplicada `supabase/migrations/20261007000100_etapa_2_schema_e_rls.sql`; lint remoto sem erros. Todas as sete tabelas públicas estão com RLS habilitada e políticas explícitas. Teste transacional com dois membros de grupos distintos e um usuário externo retornou apenas grupos/dados autorizados; as linhas sintéticas foram revertidas e sua ausência foi conferida. Auth remoto atualizado para desabilitar cadastro público; URL de retorno aponta para o GitHub Pages. CLI Supabase 2.120.0 vinculada somente ao projeto alvo.
-- **Frontend:** login, grupos, participantes, convites, despesas, saldos e sugestões consultam/calculam usando sessão e chave publicável; nenhuma chave secreta foi adicionada. Criação de despesa por qualquer membro; edição/exclusão só por admin. Helpers fora do schema exposto. Sugestões não registram pagamentos.
+- **Frontend publicado:** login, grupos, participantes, convites, despesas, saldos e sugestões usam sessão e chave publicável. Criação de despesa por qualquer membro; edição/exclusão por admin. Sugestões não registram pagamentos. A versão da Etapa 6 ainda está somente no workspace.
 - **Configuração local:** `.env.local` já está preenchido para o projeto `yzxeyqutmvjmrglmpcbb`; conferidos somente correspondência da URL e presença/formato público da chave, sem exibir seu valor. A tela de login inicializou em `http://127.0.0.1:5173/SplitUai/` com Node 24 do ambiente. O Node global 20.11.1 não inicia o Vite 7 atual. `.gitignore` ignora `.env.local`. Não enviar chaves pelo chat nem usar chave `secret`/`service_role` no frontend.
 - **Uso e cobrança (2026-10-07):** o painel confirmou `JotaChina's Org` com um único projeto e plano Free. Com filtro **All projects**, a organização não excedeu a cota no ciclo exibido (08/10/2026–08/11/2026); banco em 0,027/0,5 GB (5%), os outros indicadores visíveis em zero. A página de cobrança confirmou **spend cap habilitado** e nenhuma fatura listada. O painel informa que excedentes não geram cobrança com esse controle ligado, mas podem deixar projetos indisponíveis ou somente leitura. Revalidar limites antes de expandir uso.
 - **Convite inicial:** o redirect `http://localhost:5173/**` foi adicionado e verificado. O `bootstrap_invite` foi inserido (expira em sete dias). O primeiro envio falhou; logs registraram `SplitUai accounts are invitation-only`, emitido pela checagem de `invited_at` da função do trigger antes da validação do convite. A função foi corrigida pela migração `20261007000200_fix_invited_auth_user_trigger.sql`, aplicada pelo SQL Editor somente no projeto alvo e depois sincronizada no histórico da CLI após comparação. O segundo envio teve sucesso: o Auth criou o usuário não confirmado e o painel mostrou `Sent invite email`. O Site URL foi restaurado para GitHub Pages. O fluxo manual do painel ainda precisa ser validado para convites criados por admins.
@@ -245,6 +261,10 @@ Na revisão inicial, as funções auxiliares `is_current_user_group_member`, `is
 | 2026-10-07 | Usar React + TypeScript + Vite, idioma português e valores em BRL. | Confirmado; scaffold criado |
 | 2026-10-07 | Manter a entrada controlada por convite do administrador, sem cadastro público. | Auth local/remoto sem signup público; fluxo de autenticação implementado |
 | 2026-10-07 | Não conectar o frontend a dados reais até revisar RLS e confirmar isolamento entre grupos. | RLS aplicada e teste transacional inicial aprovado; dados reais ainda não conectados |
+| 2026-10-23 | Qualquer participante pode arquivar/restaurar grupo; admin/criador pode excluir definitivamente apenas grupo sem despesas. | Aprovado; regra aplicada por RPC no banco e testada somente local |
+| 2026-10-23 | `@usuario` público, normalizado, 3–24 caracteres e único sem diferenciar caixa; e-mail não aparece em listas comuns. | Aprovado e validado localmente; usuário pode permanecer sem identificador |
+| 2026-10-23 | Rateio igual usa cotas iguais arredondadas para baixo e atribui o resto ao pagador; percentuais distribuem resto por maiores frações; valores personalizados fecham exatamente. | Aprovado e testado com centavos locais |
+| 2026-10-23 | Parcelas afetam saldos no mês de vencimento; mostrar saldos mensal e total lado a lado. “Quanto falta” é dívida líquida ainda não acertada. | Aprovado; implementado/testado local; pagamento de parcelas não é registrado |
 
 ## Notas operacionais
 

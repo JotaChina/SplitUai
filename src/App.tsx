@@ -4,10 +4,13 @@ import { supabase } from './lib/supabase'
 import {
   createGroup,
   createGroupInvitation,
+  deleteEmptyGroup,
   getGroupMembers,
   listGroupInvitations,
   listMyGroups,
   updateGroup,
+  setGroupArchived,
+  setMyUsername,
   type GroupInvitationRecord,
   type GroupMemberView,
   type GroupRecord,
@@ -15,11 +18,14 @@ import {
 import {
   createExpense,
   calculateBalances,
+  generateMonthlySchedule,
   deleteExpense,
   formatBrlCents,
+  allocatePercentage,
   listGroupExpenses,
   parseBrlCents,
   splitEvenly,
+  type SplitMode,
   suggestSettlements,
   updateExpense,
   type ExpenseCategory,
@@ -159,19 +165,19 @@ function App() {
         </nav>
         <div className="sidebar-bottom">
           <div className="help-card"><span className="help-icon">✳</span><strong>Dividir fica leve.</strong><p>Organize os gastos e aproveite o que importa.</p></div>
-          <div className="profile"><div className="avatar avatar-you">{session.user.email?.[0]?.toUpperCase() ?? 'V'}</div><div className="profile-details"><strong title={session.user.email ?? ''}>{session.user.email}</strong><small>Conta convidada</small></div></div>
+          <div className="profile"><div className="avatar avatar-you">U</div><div className="profile-details"><strong>Minha conta</strong><small>Perfil SplitUai</small></div></div>
         </div>
       </aside>
 
       <main className="main-content">
-        <header className="topbar"><div className="breadcrumb">Espaço pessoal <span>/</span> <strong>{page === 'account' ? 'Minha conta' : page === 'expense' ? 'Nova despesa' : page === 'group' ? groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo' : page === 'new-group' ? 'Novo grupo' : 'Meus grupos'}</strong></div><div className="topbar-account"><span title={session.user.email ?? ''}>{session.user.email}</span><button className="sign-out-button" onClick={() => void signOut()} disabled={authBusy}>Sair</button></div></header>
+        <header className="topbar"><div className="breadcrumb">Espaço pessoal <span>/</span> <strong>{page === 'account' ? 'Minha conta' : page === 'expense' ? 'Nova despesa' : page === 'group' ? groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo' : page === 'new-group' ? 'Novo grupo' : 'Meus grupos'}</strong></div><div className="topbar-account"><button className="sign-out-button" onClick={() => void signOut()} disabled={authBusy}>Sair</button></div></header>
 
         {page === 'groups' && <Groups groups={groups} loading={groupsLoading} error={groupsError} onRefresh={() => void refreshGroups()} onOpen={(id) => { setSelectedGroupId(id); setPage('group') }} onCreate={() => setPage('new-group')} />}
         {page === 'new-group' && <NewGroup onBack={() => setPage('groups')} onCreate={saveNewGroup} />}
-        {page === 'group' && selectedGroupId && supabase && <Group key={selectedGroupId} client={supabase} groupId={selectedGroupId} userId={session.user.id} onBack={() => setPage('groups')} onAddExpense={() => { setEditingExpense(null); setPage('expense') }} onEditExpense={(expense) => { setEditingExpense(expense); setPage('expense') }} />}
+        {page === 'group' && selectedGroupId && supabase && <Group key={selectedGroupId} client={supabase} groupId={selectedGroupId} userId={session.user.id} onBack={() => { void refreshGroups(); setPage('groups') }} onAddExpense={() => { setEditingExpense(null); setPage('expense') }} onEditExpense={(expense) => { setEditingExpense(expense); setPage('expense') }} />}
         {page === 'group' && !selectedGroupId && <Groups groups={groups} loading={groupsLoading} error={groupsError} onRefresh={() => void refreshGroups()} onOpen={(id) => { setSelectedGroupId(id); setPage('group') }} onCreate={() => setPage('new-group')} />}
         {page === 'expense' && selectedGroupId && supabase && <Expense client={supabase} groupId={selectedGroupId} groupName={groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo'} userId={session.user.id} expense={editingExpense} onBack={() => { setEditingExpense(null); setPage('group') }} onSaved={() => { setEditingExpense(null); setPage('group') }} />}
-        {page === 'account' && <Account email={session.user.email ?? ''} onSignOut={signOut} busy={authBusy} />}
+        {page === 'account' && supabase && <Account client={supabase} email={session.user.email ?? ''} userId={session.user.id} onSignOut={signOut} busy={authBusy} />}
       </main>
     </div>
   )
@@ -185,15 +191,16 @@ function Groups({ groups, loading, error, onRefresh, onOpen, onCreate }: {
   onOpen: (id: string) => void
   onCreate: () => void
 }) {
+  const [showArchived, setShowArchived] = useState(false)
+  const visibleGroups = groups.filter((group) => Boolean(group.archived_at) === showArchived)
   return <section className="page-wrap">
-    <div className="demo-banner">Grupos, participantes e despesas são compartilhados. Os saldos ainda serão implementados.</div>
     <div className="eyebrow">SEU ESPAÇO COMPARTILHADO</div>
     <div className="page-heading"><div><h1>Seus grupos<span className="heading-dot">.</span></h1><p>Grupos dos quais sua conta participa.</p></div><div className="heading-actions"><button className="button button-light" onClick={onRefresh} disabled={loading}>Atualizar</button><button className="button button-dark" onClick={onCreate}><span>＋</span> Novo grupo</button></div></div>
     {error && <p className="auth-error" role="alert">{error}</p>}
-    <div className="section-title"><div><h2>Grupos</h2><p>{loading ? 'Carregando…' : `${groups.length} ${groups.length === 1 ? 'grupo' : 'grupos'}`}</p></div></div>
+    <div className="section-title"><div><h2>{showArchived ? 'Grupos arquivados' : 'Grupos ativos'}</h2><p>{loading ? 'Carregando…' : `${visibleGroups.length} ${visibleGroups.length === 1 ? 'grupo' : 'grupos'}`}</p></div><div className="heading-actions"><button className="button button-light" onClick={() => setShowArchived(false)} aria-pressed={!showArchived}>Ativos ({groups.filter((group) => !group.archived_at).length})</button><button className="button button-light" onClick={() => setShowArchived(true)} aria-pressed={showArchived}>Arquivados ({groups.filter((group) => group.archived_at).length})</button></div></div>
     <div className="group-grid">
-      {groups.map((group, index) => <button className="group-card" key={group.id} onClick={() => onOpen(group.id)}><div className={`group-cover ${index % 2 === 0 ? 'cover-coast' : 'cover-dinner'}`}><span className="cover-tag">GRUPO</span><span className="cover-emoji">{index % 2 === 0 ? '✳' : '◌'}</span><div className="cover-caption">CRIADO EM {new Date(group.created_at).toLocaleDateString('pt-BR')}</div></div><div className="group-card-body"><div className="group-title-line"><h3>{group.name}</h3><span className="arrow-circle">↗</span></div><p>{group.description || 'Organize as despesas com seus participantes.'}</p><div className="group-meta"><span>{group.created_by ? 'Grupo compartilhado' : 'Grupo'}</span><span className="meta-divider" /><span>Despesas compartilhadas</span></div></div></button>)}
-      {!loading && groups.length === 0 && <div className="empty-state"><strong>Você ainda não participa de um grupo.</strong><p>Crie o primeiro para começar a organizar os participantes.</p><button className="button button-dark" onClick={onCreate}><span>＋</span> Criar grupo</button></div>}
+      {visibleGroups.map((group, index) => <button className="group-card" key={group.id} onClick={() => onOpen(group.id)}><div className={`group-cover ${index % 2 === 0 ? 'cover-coast' : 'cover-dinner'}`}><span className="cover-tag">{group.archived_at ? 'ARQUIVADO' : 'GRUPO'}</span><span className="cover-emoji">{index % 2 === 0 ? '✳' : '◌'}</span><div className="cover-caption">CRIADO EM {new Date(group.created_at).toLocaleDateString('pt-BR')}</div></div><div className="group-card-body"><div className="group-title-line"><h3>{group.name}</h3><span className="arrow-circle">↗</span></div><p>{group.description || 'Organize as despesas com seus participantes.'}</p><div className="group-meta"><span>{group.created_by ? 'Grupo compartilhado' : 'Grupo'}</span><span className="meta-divider" /><span>{group.archived_at ? 'Arquivado' : 'Despesas compartilhadas'}</span></div></div></button>)}
+      {!loading && visibleGroups.length === 0 && <div className="empty-state"><strong>{showArchived ? 'Nenhum grupo arquivado.' : 'Você ainda não participa de um grupo ativo.'}</strong><p>{showArchived ? 'Grupos arquivados continuam disponíveis para consulta.' : 'Crie o primeiro para começar a organizar os participantes.'}</p>{!showArchived && <button className="button button-dark" onClick={onCreate}><span>＋</span> Criar grupo</button>}</div>}
     </div>
     <footer className="page-footer"><span>Feito pra dividir a vida. <b>♡</b></span><span>SplitUai <i>·</i> 2026</span></footer>
   </section>
@@ -234,9 +241,21 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense }:
   const [email, setEmail] = useState('')
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  const [categoryFilter, setCategoryFilter] = useState<ExpenseCategory | 'all'>('all')
   const isAdmin = members.some((member) => member.user_id === userId && member.role === 'admin')
-  const balances = calculateBalances(groupExpenses, members.map((member) => member.user_id))
-  const settlements = suggestSettlements(balances)
+  const allBalances = calculateBalances(groupExpenses, members.map((member) => member.user_id))
+  const localNow = new Date()
+  const currentMonth = `${localNow.getFullYear()}-${String(localNow.getMonth() + 1).padStart(2, '0')}`
+  const monthBalances = calculateBalances(groupExpenses, members.map((member) => member.user_id), currentMonth)
+  const settlements = suggestSettlements(allBalances)
+  const monthDebtTotal = Math.abs(monthBalances.filter((row) => row.balance_cents < 0).reduce((sum, row) => sum + row.balance_cents, 0))
+  const allTimeDebtTotal = Math.abs(allBalances.filter((row) => row.balance_cents < 0).reduce((sum, row) => sum + row.balance_cents, 0))
+  const categoryTotals = (['alimentacao','hospedagem','transporte','atividades','outros'] as ExpenseCategory[]).map((category) => ({
+    category,
+    month: groupExpenses.filter((expense) => expense.category === category).reduce((sum, expense) => sum + expense.installments.filter((part) => part.due_date.slice(0, 7) === currentMonth).reduce((partSum, part) => partSum + part.amount_cents, 0), 0),
+    all: groupExpenses.filter((expense) => expense.category === category).reduce((sum, expense) => sum + expense.amount_cents, 0),
+  }))
+  const visibleExpenses = categoryFilter === 'all' ? groupExpenses : groupExpenses.filter((expense) => expense.category === categoryFilter)
 
   useEffect(() => {
     let active = true
@@ -245,7 +264,7 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense }:
     void (async () => {
       try {
         const { data: groupData, error: groupError } = await client.from('groups')
-          .select('id, name, description, created_by, created_at').eq('id', groupId).maybeSingle()
+          .select('id, name, description, created_by, created_at, archived_at').eq('id', groupId).maybeSingle()
         if (groupError) throw groupError
         if (!groupData) throw new Error('Este grupo não existe ou sua conta não tem acesso.')
         const [memberData, inviteData] = await Promise.all([
@@ -312,18 +331,57 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense }:
     }
   }
 
+  async function archiveGroup() {
+    const archived = !group?.archived_at
+    const verb = archived ? 'arquivar' : 'restaurar'
+    if (!window.confirm(`Confirma ${verb} o grupo “${group?.name}”? O histórico e os saldos serão preservados.`)) return
+    setBusy(true)
+    setError(null)
+    try {
+      await setGroupArchived(client, groupId, archived)
+      onBack()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : `Não foi possível ${verb} o grupo.`)
+    } finally { setBusy(false) }
+  }
+
+  async function permanentlyDeleteGroup() {
+    if (!group || !window.confirm(`Excluir definitivamente “${group.name}”? Esta ação não pode ser desfeita.`)) return
+    setBusy(true)
+    setError(null)
+    try {
+      await deleteEmptyGroup(client, groupId)
+      onBack()
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Não foi possível excluir o grupo. Grupos com despesas devem ser arquivados.')
+    } finally { setBusy(false) }
+  }
+
   if (loading) return <section className="page-wrap"><button className="back-link" onClick={onBack}>← Voltar aos grupos</button><p className="auth-loading">Carregando grupo…</p></section>
   if (error && !group) return <section className="page-wrap"><button className="back-link" onClick={onBack}>← Voltar aos grupos</button><p className="auth-error" role="alert">{error}</p></section>
   if (!group) return null
 
-  return <section className="page-wrap"><button className="back-link" onClick={onBack}>← Voltar aos grupos</button><div className="detail-hero"><div><div className="eyebrow">GRUPO · CRIADO EM {new Date(group.created_at).toLocaleDateString('pt-BR')}</div>{editing ? <form className="group-edit-form" onSubmit={(event) => void saveDetails(event)}><label>Nome<input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} required /></label><label>Descrição<textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1000} rows={2} /></label><div className="form-actions"><button type="button" className="button button-light" onClick={() => { setName(group.name); setDescription(group.description ?? ''); setEditing(false) }}>Cancelar</button><button className="button button-dark" disabled={busy}>Salvar</button></div></form> : <><h1>{group.name}<span className="heading-dot">.</span></h1><p>{group.description || 'Organize as despesas com seus participantes.'}</p>{isAdmin && <button className="text-button" onClick={() => setEditing(true)}>Editar informações</button>}</>}<div className="detail-people"><span>{members.length} {members.length === 1 ? 'participante' : 'participantes'} · Seu papel: {isAdmin ? 'admin' : 'membro'}</span></div></div><div className="detail-illustration">✳</div></div>{error && <p className="auth-error" role="alert">{error}</p>}
-    <div className="section-title"><div><h2>Participantes</h2><p>Somente integrantes deste grupo aparecem aqui.</p></div></div><div className="member-list">{members.map((member) => <div className="member-row" key={member.user_id}><span className="avatar avatar-you">{(member.display_name?.[0] ?? 'P').toUpperCase()}</span><span className="member-name">{member.display_name || 'Participante'}</span><span className="role-badge">{member.role === 'admin' ? 'Administrador' : 'Membro'}</span></div>)}</div>
+  const canDeleteGroup = (isAdmin || group.created_by === userId) && groupExpenses.length === 0
+  const memberLabel = (userId: string) => {
+    const member = members.find((item) => item.user_id === userId)
+    return member?.username ? `@${member.username}` : member?.display_name || 'Sem identificador'
+  }
+  const renderBalances = (rows: typeof allBalances) => <div className="balance-list">{rows.map((balance) => <div className="balance-row" key={balance.user_id}><span>{memberLabel(balance.user_id)}</span><strong className={balance.balance_cents > 0 ? 'balance-positive' : balance.balance_cents < 0 ? 'balance-negative' : ''}>{balance.balance_cents > 0 ? 'Recebe ' : balance.balance_cents < 0 ? 'Deve ' : ''}{formatBrlCents(Math.abs(balance.balance_cents))}</strong></div>)}</div>
+  const categoryLabels: Record<ExpenseCategory, string> = { alimentacao: 'Alimentação', hospedagem: 'Hospedagem', transporte: 'Transporte', atividades: 'Atividades', outros: 'Outros' }
+  const installmentStatus = (dueDate: string) => {
+    const now = new Date()
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    return dueDate < today ? 'Vencimento passado' : 'A vencer'
+  }
+  return <section className="page-wrap"><button className="back-link" onClick={onBack}>← Voltar aos grupos</button><div className="detail-hero"><div><div className="eyebrow">{group.archived_at ? 'GRUPO ARQUIVADO' : 'GRUPO'} · CRIADO EM {new Date(group.created_at).toLocaleDateString('pt-BR')}</div>{editing ? <form className="group-edit-form" onSubmit={(event) => void saveDetails(event)}><label>Nome<input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} required /></label><label>Descrição<textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1000} rows={2} /></label><div className="form-actions"><button type="button" className="button button-light" onClick={() => { setName(group.name); setDescription(group.description ?? ''); setEditing(false) }}>Cancelar</button><button className="button button-dark" disabled={busy}>Salvar</button></div></form> : <><h1>{group.name}<span className="heading-dot">.</span></h1><p>{group.description || 'Organize as despesas com seus participantes.'}</p>{isAdmin && <button className="text-button" onClick={() => setEditing(true)}>Editar informações</button>}</>}<div className="detail-people"><span>{members.length} {members.length === 1 ? 'participante' : 'participantes'} · Seu papel: {isAdmin ? 'admin' : 'membro'}</span></div><div className="heading-actions"><button className="button button-light" onClick={() => void archiveGroup()} disabled={busy}>{group.archived_at ? 'Restaurar grupo' : 'Arquivar grupo'}</button>{canDeleteGroup && <button className="button button-light" onClick={() => void permanentlyDeleteGroup()} disabled={busy}>Excluir grupo</button>}</div>{groupExpenses.length > 0 && <small>Grupos com despesas podem ser arquivados; o histórico não pode ser apagado.</small>}</div><div className="detail-illustration">✳</div></div>{error && <p className="auth-error" role="alert">{error}</p>}
+    <div className="section-title"><div><h2>Participantes</h2><p>Somente integrantes deste grupo aparecem aqui.</p></div></div><div className="member-list">{members.map((member) => <div className="member-row" key={member.user_id}><span className="avatar avatar-you">{(member.username?.[0] ?? member.display_name?.[0] ?? 'P').toUpperCase()}</span><span className="member-name">{member.username ? `@${member.username}` : member.display_name || 'Sem identificador'}</span><span className="role-badge">{member.role === 'admin' ? 'Administrador' : 'Membro'}</span></div>)}</div>
     {isAdmin && <><div className="section-title"><div><h2>Convites</h2><p>Crie o registro e depois envie o e-mail pelo painel Auth.</p></div></div><div className="invite-panel"><form className="invite-form" onSubmit={(event) => void invite(event)}><label>E-mail da pessoa<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required placeholder="pessoa@email.com" disabled={busy} /></label><button className="button button-dark" disabled={busy}>{busy ? 'Criando…' : 'Criar convite'}</button></form><p className="invite-help">Após criar, no projeto Supabase correto, abra Authentication → Users → Add user → Send invitation e use este mesmo e-mail. O trigger do banco associa a conta ao grupo quando a conta Auth é criada. Nenhum e-mail é enviado pelo app.</p>{notice && <p className="auth-message" role="status">{notice}</p>}{invitations.length > 0 && <div className="invitation-list">{invitations.map((invitation) => <div className="invitation-row" key={invitation.id}><div><strong>{invitation.invited_email}</strong><small>Expira em {new Date(invitation.expires_at).toLocaleDateString('pt-BR')}</small></div><span className={`invite-status status-${invitation.status}`}>{invitation.status === 'pending' ? 'Pendente' : invitation.status === 'sent' ? 'Enviado' : invitation.status === 'revoked' ? 'Revogado' : 'Expirado'}</span></div>)}</div>}</div></>}
-    <div className="detail-stats"><div><small>DESPESAS DO GRUPO</small><strong>{groupExpenses.length}</strong></div><div><small>PARTICIPANTES</small><strong>{members.length}</strong></div><div><small>SEU PAPEL</small><strong>{isAdmin ? 'Administrador' : 'Membro'}</strong></div><button className="button button-dark" onClick={onAddExpense}><span>＋</span> Nova despesa</button></div>
-    <div className="section-title detail-section-title"><div><h2>Saldos</h2><p>Saldo líquido: o que cada pessoa pagou menos sua parte nas despesas.</p></div></div>
-    <div className="balance-list">{balances.map((balance) => { const member = members.find((item) => item.user_id === balance.user_id); return <div className="balance-row" key={balance.user_id}><span>{member?.display_name || 'Participante'}</span><strong className={balance.balance_cents > 0 ? 'balance-positive' : balance.balance_cents < 0 ? 'balance-negative' : ''}>{balance.balance_cents > 0 ? 'Recebe ' : balance.balance_cents < 0 ? 'Deve ' : ''}{formatBrlCents(Math.abs(balance.balance_cents))}</strong></div> })}</div>
-    <div className="settlement-panel"><h3>Sugestões de acerto</h3>{settlements.length ? <div className="settlement-list">{settlements.map((item, index) => { const from = members.find((member) => member.user_id === item.from_user_id)?.display_name || 'Participante'; const to = members.find((member) => member.user_id === item.to_user_id)?.display_name || 'Participante'; return <div className="balance-row" key={`${item.from_user_id}-${item.to_user_id}-${index}`}><span>{from} paga para {to}</span><strong>{formatBrlCents(item.amount_cents)}</strong></div> })}</div> : <p>Todos estão em dia. Não há transferências sugeridas.</p>}<small>São sugestões calculadas a partir das despesas registradas; não confirmam pagamentos feitos.</small></div>
-    <div className="section-title detail-section-title"><div><h2>Despesas</h2><p>Registros compartilhados com os participantes deste grupo.</p></div></div><div className="expense-list">{groupExpenses.length === 0 ? <div className="empty-expenses"><strong>Nenhuma despesa ainda.</strong><p>Registre a primeira para dividir o total com o grupo.</p></div> : groupExpenses.map((expense) => { const payer = members.find((member) => member.user_id === expense.paid_by)?.display_name || 'Participante'; return <div className="expense-row" key={expense.id}><span className={`expense-icon ${expense.category === 'hospedagem' ? 'peach' : expense.category === 'alimentacao' ? 'mint' : 'lavender'}`}>{expense.category === 'hospedagem' ? '🏡' : expense.category === 'alimentacao' ? '🍴' : expense.category === 'transporte' ? '🚗' : expense.category === 'atividades' ? '🎟️' : '✳'}</span>{isAdmin ? <button className="expense-name expense-open" onClick={() => onEditExpense(expense)}><strong>{expense.description}</strong><small>{payer} pagou · {new Date(`${expense.expense_date}T12:00:00`).toLocaleDateString('pt-BR')} · {expense.shares.length} {expense.shares.length === 1 ? 'pessoa' : 'pessoas'}</small></button> : <div className="expense-name"><strong>{expense.description}</strong><small>{payer} pagou · {new Date(`${expense.expense_date}T12:00:00`).toLocaleDateString('pt-BR')} · {expense.shares.length} {expense.shares.length === 1 ? 'pessoa' : 'pessoas'}</small></div>}<strong className="expense-amount">{formatBrlCents(expense.amount_cents)}</strong>{isAdmin && <><button className="expense-edit" aria-label={`Editar ${expense.description}`} onClick={() => onEditExpense(expense)}>Editar</button><button className="expense-delete" aria-label={`Excluir ${expense.description}`} onClick={() => void removeExpense(expense)}>×</button></>}</div> })}</div></section>
+    <div className="detail-stats"><div><small>DESPESAS DO GRUPO</small><strong>{groupExpenses.length}</strong></div><div><small>PARTICIPANTES</small><strong>{members.length}</strong></div><div><small>VALOR DEVEDOR TOTAL</small><strong>{formatBrlCents(allTimeDebtTotal)}</strong></div><button className="button button-dark" onClick={onAddExpense}><span>＋</span> Nova despesa</button></div>
+    <div className="section-title detail-section-title"><div><h2>Saldos em paralelo</h2><p>As parcelas afetam o mês em que vencem; o total soma todo o cronograma.</p></div></div>
+    <div className="balance-columns"><section className="settlement-panel"><h3>Saldo do mês · {new Date(`${currentMonth}-01T12:00:00`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}</h3>{renderBalances(monthBalances)}<strong>Total devedor do mês: {formatBrlCents(monthDebtTotal)}</strong></section><section className="settlement-panel"><h3>Saldo de todo o período</h3>{renderBalances(allBalances)}<strong>Falta acertar: {formatBrlCents(allTimeDebtTotal)}</strong></section></div>
+    <div className="settlement-panel"><h3>Sugestões de acerto · todo o período</h3>{settlements.length ? <div className="settlement-list">{settlements.map((item, index) => <div className="balance-row" key={`${item.from_user_id}-${item.to_user_id}-${index}`}><span>{memberLabel(item.from_user_id)} paga para {memberLabel(item.to_user_id)}</span><strong>{formatBrlCents(item.amount_cents)}</strong></div>)}</div> : <p>Todos estão em dia. Não há transferências sugeridas.</p>}<small>São sugestões calculadas a partir das despesas registradas; não confirmam pagamentos feitos.</small></div>
+    <div className="section-title detail-section-title"><div><h2>Despesas por categoria</h2><p>Totais por vencimento no mês atual e no período completo.</p></div></div><div className="category-summary">{categoryTotals.map((row) => <div className="balance-row" key={row.category}><span>{categoryLabels[row.category]}</span><strong>{formatBrlCents(row.month)} no mês · {formatBrlCents(row.all)} no total</strong></div>)}</div>
+    <div className="section-title detail-section-title"><div><h2>Despesas</h2><p>Registros compartilhados com os participantes deste grupo.</p></div><label>Categoria<select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value as ExpenseCategory | 'all')}><option value="all">Todas</option>{Object.entries(categoryLabels).map(([key,label]) => <option key={key} value={key}>{label}</option>)}</select></label></div><div className="expense-list">{visibleExpenses.length === 0 ? <div className="empty-expenses"><strong>Nenhuma despesa nesta categoria.</strong><p>Registre uma despesa ou escolha outra categoria.</p></div> : visibleExpenses.map((expense) => { const payer = memberLabel(expense.paid_by); const schedule = expense.installments.map((part) => `${formatBrlCents(part.amount_cents)} em ${new Date(`${part.due_date}T12:00:00`).toLocaleDateString('pt-BR')} (${installmentStatus(part.due_date)})`).join(' · '); return <div className="expense-row" key={expense.id}><span className={`expense-icon ${expense.category === 'hospedagem' ? 'peach' : expense.category === 'alimentacao' ? 'mint' : 'lavender'}`}>{expense.category === 'hospedagem' ? '🏡' : expense.category === 'alimentacao' ? '🍴' : expense.category === 'transporte' ? '🚗' : expense.category === 'atividades' ? '🎟️' : '✳'}</span>{isAdmin ? <button className="expense-name expense-open" onClick={() => onEditExpense(expense)}><strong>{expense.description}</strong><small>{payer} pagou · {categoryLabels[expense.category]} · {expense.installments.length}x · {schedule}</small></button> : <div className="expense-name"><strong>{expense.description}</strong><small>{payer} pagou · {categoryLabels[expense.category]} · {expense.installments.length}x · {schedule}</small></div>}<strong className="expense-amount">{formatBrlCents(expense.amount_cents)}</strong>{expense.rounding_remainder_cents > 0 && <small>Ajuste {formatBrlCents(expense.rounding_remainder_cents)} fica com quem pagou</small>}{isAdmin && <><button className="expense-edit" aria-label={`Editar ${expense.description}`} onClick={() => onEditExpense(expense)}>Editar</button><button className="expense-delete" aria-label={`Excluir ${expense.description}`} onClick={() => void removeExpense(expense)}>×</button></>}</div> })}</div></section>
 }
 
 function Expense({ client, groupId, groupName, userId, expense, onBack, onSaved }: { client: NonNullable<typeof supabase>; groupId: string; groupName: string; userId: string; expense: ExpenseRecord | null; onBack: () => void; onSaved: () => void }) {
@@ -332,9 +390,14 @@ function Expense({ client, groupId, groupName, userId, expense, onBack, onSaved 
   const [amount, setAmount] = useState(expense ? `${Math.floor(expense.amount_cents / 100)},${String(expense.amount_cents % 100).padStart(2, '0')}` : '')
   const [paidBy, setPaidBy] = useState(expense?.paid_by ?? userId)
   const [category, setCategory] = useState<ExpenseCategory>(expense?.category ?? 'outros')
-  const [expenseDate, setExpenseDate] = useState(expense?.expense_date ?? new Date().toISOString().slice(0, 10))
+  const [expenseDate, setExpenseDate] = useState(expense?.expense_date ?? new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10))
+  const [firstDueDate, setFirstDueDate] = useState(expense?.installments[0]?.due_date ?? expense?.expense_date ?? new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10))
   const [notes, setNotes] = useState(expense?.notes ?? '')
   const [participantIds, setParticipantIds] = useState<string[]>(expense?.shares.map((share) => share.user_id) ?? [])
+  const [splitMode, setSplitMode] = useState<SplitMode>(expense?.split_mode ?? 'equal')
+  const [percentageInputs, setPercentageInputs] = useState<Record<string, string>>(() => Object.fromEntries((expense?.shares ?? []).map((share) => [share.user_id, String(share.percentage ?? (expense?.amount_cents ? share.amount_cents * 100 / expense.amount_cents : 0))])))
+  const [customInputs, setCustomInputs] = useState<Record<string, string>>(() => Object.fromEntries((expense?.shares ?? []).map((share) => [share.user_id, `${Math.floor(share.amount_cents / 100)},${String(share.amount_cents % 100).padStart(2, '0')}`])))
+  const [installmentCount, setInstallmentCount] = useState(String(expense?.installments.length ?? 1))
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -355,30 +418,68 @@ function Expense({ client, groupId, groupName, userId, expense, onBack, onSaved 
     return () => { active = false }
   }, [client, groupId, expense, userId])
 
+  function makeShares(amountCents: number) {
+    if (!participantIds.length) throw new Error('Selecione ao menos uma pessoa.')
+    if (splitMode === 'equal') return splitEvenly(amountCents, participantIds)
+    if (splitMode === 'percentage') {
+      const percentages = Object.fromEntries(participantIds.map((id) => [id, Number(percentageInputs[id] ?? 0)]))
+      return { shares: allocatePercentage(amountCents, percentages), remainderCents: 0 }
+    }
+    const shares = participantIds.map((id) => {
+      const value = (customInputs[id] ?? '0').trim()
+      const amount_cents = /^0+(?:[,.]0{1,2})?$/.test(value) ? 0 : parseBrlCents(value)
+      return { user_id: id, amount_cents }
+    })
+    if (shares.reduce((sum, share) => sum + share.amount_cents, 0) !== amountCents) throw new Error('Os valores individuais precisam somar exatamente o total.')
+    return { shares, remainderCents: 0 }
+  }
+
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
     setBusy(true)
     setError(null)
     try {
       const amountCents = parseBrlCents(amount)
-      const shares = splitEvenly(amountCents, participantIds)
-      const values = { description, category, amountCents, paidBy, expenseDate, notes, shares }
+      const { shares, remainderCents } = makeShares(amountCents)
+      const count = Number(installmentCount)
+      const installments = generateMonthlySchedule(amountCents, count, firstDueDate, shares, remainderCents)
+      const values = { description, category, amountCents, paidBy, expenseDate, notes, splitMode, roundingRemainderCents: remainderCents, shares, installments }
       if (expense) await updateExpense(client, expense.id, values)
       else await createExpense(client, groupId, values)
       onSaved()
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Não foi possível salvar a despesa.')
-    } finally {
-      setBusy(false)
-    }
+    } finally { setBusy(false) }
   }
 
-  const parsedAmount = (() => { try { return parseBrlCents(amount) } catch { return null } })()
-  const preview = parsedAmount && participantIds.length ? splitEvenly(parsedAmount, participantIds) : []
-  const previewMin = preview.length ? Math.min(...preview.map((share) => share.amount_cents)) : 0
-  const previewMax = preview.length ? Math.max(...preview.map((share) => share.amount_cents)) : 0
+  let preview: ReturnType<typeof splitEvenly> | null = null
+  let previewError: string | null = null
+  let parsedAmount: number | null = null
+  try {
+    parsedAmount = parseBrlCents(amount)
+    preview = makeShares(parsedAmount)
+    generateMonthlySchedule(parsedAmount, Number(installmentCount), firstDueDate, preview.shares, preview.remainderCents)
+  } catch (reason) { previewError = reason instanceof Error ? reason.message : 'Confira os dados do rateio.' }
+  const memberLabel = (member: GroupMemberView) => member.username ? `@${member.username}` : member.display_name || 'Sem identificador'
+  const totalPercent = participantIds.reduce((sum, id) => sum + Number(percentageInputs[id] ?? 0), 0)
+  const installmentsPreview = parsedAmount && preview && !previewError ? generateMonthlySchedule(parsedAmount, Number(installmentCount), firstDueDate, preview.shares, preview.remainderCents) : []
 
-  return <section className="page-wrap form-wrap"><button className="back-link" onClick={onBack}>← Voltar ao grupo</button><div className="eyebrow">{groupName}</div><h1>{expense ? 'Editar despesa' : 'Nova despesa'}<span className="heading-dot">.</span></h1><p className="form-intro">Registre o gasto e divida cada centavo com o grupo.</p>{loading ? <p className="auth-loading">Carregando participantes…</p> : <form onSubmit={(event) => void submit(event)}><label>Descrição<input value={description} onChange={(event) => setDescription(event.target.value)} maxLength={200} required placeholder="Ex.: almoço na praia" disabled={busy} /></label><div className="form-two"><label>Valor total<div className="money-input"><span>R$</span><input value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" required placeholder="0,00" disabled={busy} /></div></label><label>Quem pagou?<select value={paidBy} onChange={(event) => setPaidBy(event.target.value)} required disabled={busy}><option value="" disabled>Selecione</option>{members.map((member) => <option key={member.user_id} value={member.user_id}>{member.display_name || 'Participante'}{member.user_id === userId ? ' (você)' : ''}</option>)}</select></label></div><div className="form-two"><label>Categoria<select value={category} onChange={(event) => setCategory(event.target.value as ExpenseCategory)} disabled={busy}><option value="alimentacao">🍴 Alimentação</option><option value="hospedagem">🏡 Hospedagem</option><option value="transporte">🚗 Transporte</option><option value="atividades">🎟️ Atividades</option><option value="outros">✳ Outros</option></select></label><label>Data<input type="date" value={expenseDate} onChange={(event) => setExpenseDate(event.target.value)} required disabled={busy} /></label></div><fieldset className="participant-picker"><legend>Dividir com</legend>{members.map((member) => <label key={member.user_id}><input type="checkbox" checked={participantIds.includes(member.user_id)} onChange={(event) => setParticipantIds((current) => event.target.checked ? [...current, member.user_id] : current.filter((id) => id !== member.user_id))} disabled={busy} /><span>{member.display_name || 'Participante'}{member.user_id === userId ? ' (você)' : ''}</span></label>)}{members.length === 0 && <p>Este grupo não tem participantes.</p>}</fieldset><label>Observações (opcional)<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={2000} rows={2} disabled={busy} /></label>{preview.length > 0 && <div className="form-note"><span>✳</span> Cada pessoa fica com {formatBrlCents(previewMin)}{previewMax > previewMin ? ` ou ${formatBrlCents(previewMax)}` : ''}. A soma fecha em {formatBrlCents(parsedAmount!)}.</div>}{error && <p className="auth-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="button button-light" onClick={onBack} disabled={busy}>Cancelar</button><button type="submit" className="button button-dark" disabled={busy || members.length === 0}>{busy ? 'Salvando…' : expense ? 'Salvar alterações' : 'Salvar despesa'} <span>→</span></button></div></form>}</section>
+  return <section className="page-wrap form-wrap"><button className="back-link" onClick={onBack}>← Voltar ao grupo</button><div className="eyebrow">{groupName}</div><h1>{expense ? 'Editar despesa' : 'Nova despesa'}<span className="heading-dot">.</span></h1><p className="form-intro">Registre o gasto, escolha como dividir e confira as parcelas antes de salvar.</p>{loading ? <p className="auth-loading">Carregando participantes…</p> : <form onSubmit={(event) => void submit(event)}>
+    <label>Descrição<input value={description} onChange={(event) => setDescription(event.target.value)} maxLength={200} required placeholder="Ex.: almoço na praia" disabled={busy} /></label>
+    <div className="form-two"><label>Valor total<div className="money-input"><span>R$</span><input value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" required placeholder="0,00" disabled={busy} /></div></label><label>Quem pagou?<select value={paidBy} onChange={(event) => setPaidBy(event.target.value)} required disabled={busy}><option value="" disabled>Selecione</option>{members.map((member) => <option key={member.user_id} value={member.user_id}>{memberLabel(member)}{member.user_id === userId ? ' (você)' : ''}</option>)}</select></label></div>
+    <div className="form-two"><label>Categoria<select value={category} onChange={(event) => setCategory(event.target.value as ExpenseCategory)} disabled={busy}><option value="alimentacao">🍴 Alimentação</option><option value="hospedagem">🏡 Hospedagem</option><option value="transporte">🚗 Transporte</option><option value="atividades">🎟️ Atividades</option><option value="outros">✳ Outros</option></select></label><label>Data da despesa<input type="date" value={expenseDate} onChange={(event) => setExpenseDate(event.target.value)} required disabled={busy} /></label></div>
+    <label>Forma de divisão<select value={splitMode} onChange={(event) => setSplitMode(event.target.value as SplitMode)} disabled={busy}><option value="equal">Igualmente</option><option value="percentage">Por porcentagem</option><option value="custom">Valores definidos por pessoa</option></select></label>
+    <fieldset className="participant-picker"><legend>Participantes</legend>{members.map((member) => <label key={member.user_id}><input type="checkbox" checked={participantIds.includes(member.user_id)} onChange={(event) => { const ids = event.target.checked ? [...participantIds, member.user_id] : participantIds.filter((id) => id !== member.user_id); setParticipantIds(ids); if (event.target.checked) { const equal = ids.length ? 100 / ids.length : 0; setPercentageInputs((current) => Object.fromEntries(ids.map((id) => [id, current[id] ?? String(equal)]))) } }} disabled={busy} /><span>{memberLabel(member)}{member.user_id === userId ? ' (você)' : ''}</span></label>)}</fieldset>
+    {splitMode === 'percentage' && participantIds.map((id) => <label key={id}>{memberLabel(members.find((member) => member.user_id === id)!)} · porcentagem<input type="number" min="0" max="100" step="0.01" value={percentageInputs[id] ?? ''} onChange={(event) => setPercentageInputs((current) => ({ ...current, [id]: event.target.value }))} disabled={busy} /></label>)}
+    {splitMode === 'percentage' && <small>Soma informada: {totalPercent.toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%. Deve fechar em 100%.</small>}
+    {splitMode === 'custom' && participantIds.map((id) => <label key={id}>{memberLabel(members.find((member) => member.user_id === id)!)} · valor<div className="money-input"><span>R$</span><input inputMode="decimal" value={customInputs[id] ?? ''} onChange={(event) => setCustomInputs((current) => ({ ...current, [id]: event.target.value }))} disabled={busy} /></div></label>)}
+    {splitMode === 'equal' && <small>Na divisão igual, todos recebem a mesma cota arredondada para baixo; os centavos restantes ficam com quem pagou.</small>}
+    <div className="form-two"><label>Quantidade de parcelas<input type="number" min="1" max="60" step="1" value={installmentCount} onChange={(event) => setInstallmentCount(event.target.value)} required disabled={busy} /></label><label>Primeiro vencimento<input type="date" value={firstDueDate} onChange={(event) => setFirstDueDate(event.target.value)} required disabled={busy} /></label></div>
+    <label>Observações (opcional)<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={2000} rows={2} disabled={busy} /></label>
+    {preview && !previewError && <div className="form-note"><strong>Prévia do rateio</strong>{preview.shares.map((share) => <div key={share.user_id}>{memberLabel(members.find((member) => member.user_id === share.user_id)!)}: {formatBrlCents(share.amount_cents)}</div>)}{preview.remainderCents > 0 && <p>Ajuste de {formatBrlCents(preview.remainderCents)} fica com quem pagou.</p>}<strong>Cronograma</strong>{installmentsPreview.map((part) => <div key={part.installment_number}>Parcela {part.installment_number}/{installmentsPreview.length}: {formatBrlCents(part.amount_cents)} · vence {new Date(`${part.due_date}T12:00:00`).toLocaleDateString('pt-BR')}</div>)}</div>}
+    {previewError && <p className="auth-error" role="alert">{previewError}</p>}{error && <p className="auth-error" role="alert">{error}</p>}
+    <div className="form-actions"><button type="button" className="button button-light" onClick={onBack} disabled={busy}>Cancelar</button><button type="submit" className="button button-dark" disabled={busy || members.length === 0 || !preview || Boolean(previewError)}>{busy ? 'Salvando…' : expense ? 'Salvar alterações' : 'Salvar despesa'} <span>→</span></button></div>
+  </form>}</section>
 }
 
 function Login({ configured, onSignIn, busy, error }: {
@@ -421,8 +522,34 @@ function PasswordSetup({ onSubmit, onSignOut, busy, error }: {
   return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><span className="brand-mark">s<span>.</span></span><span>split<span className="brand-accent">uai</span></span></div><div className="eyebrow">CONVITE ACEITO</div><h1>Crie sua senha<span className="heading-dot">.</span></h1><p className="form-intro">Defina uma senha para entrar no SplitUai.</p><form onSubmit={submit}><label>Nova senha<input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={6} required disabled={busy} /></label><label>Confirme a senha<input type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={6} required disabled={busy} /></label><button className="button button-dark full-button" type="submit" disabled={busy}>{busy ? 'Salvando…' : 'Salvar senha'} <span>→</span></button>{(validationError || error) && <p className="auth-error" role="alert">{validationError ?? error}</p>}<button className="text-button auth-signout" type="button" onClick={() => void onSignOut()} disabled={busy}>Sair</button></form></section>
 }
 
-function Account({ email, onSignOut, busy }: { email: string; onSignOut: () => Promise<void>; busy: boolean }) {
-  return <section className="page-wrap form-wrap"><div className="eyebrow">SUA CONTA</div><h1>Minha conta<span className="heading-dot">.</span></h1><p className="form-intro">Sessão iniciada como {email}.</p><div className="form-actions"><button className="button button-light" onClick={() => void onSignOut()} disabled={busy}>{busy ? 'Saindo…' : 'Sair da conta'}</button></div></section>
+function Account({ client, email, userId, onSignOut, busy }: { client: NonNullable<typeof supabase>; email: string; userId: string; onSignOut: () => Promise<void>; busy: boolean }) {
+  const [username, setUsername] = useState('')
+  const [profileLoading, setProfileLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  useEffect(() => {
+    let active = true
+    void client.from('profiles').select('username').eq('id', userId).maybeSingle().then(({ data, error: queryError }) => {
+      if (!active) return
+      if (queryError) setError(queryError.message)
+      setUsername(data?.username ?? '')
+      setProfileLoading(false)
+    })
+    return () => { active = false }
+  }, [client, userId])
+  async function saveProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    setSaving(true); setError(null); setNotice(null)
+    try {
+      const saved = await setMyUsername(client, username)
+      setUsername(saved)
+      setNotice(`Seu identificador é @${saved}.`)
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Não foi possível salvar o identificador. Talvez ele já esteja em uso.')
+    } finally { setSaving(false) }
+  }
+  return <section className="page-wrap form-wrap"><div className="eyebrow">SUA CONTA</div><h1>Minha conta<span className="heading-dot">.</span></h1><p className="form-intro">Seu e-mail fica visível apenas nesta área de conta e nos fluxos de convite.</p>{profileLoading ? <p className="auth-loading">Carregando perfil…</p> : <form onSubmit={(event) => void saveProfile(event)}><label>Identificador público<input value={username} onChange={(event) => setUsername(event.target.value)} minLength={3} maxLength={24} pattern="[A-Za-z0-9_]{3,24}" placeholder="ex.: ana_silva" required disabled={saving} /></label><small>Use de 3 a 24 letras sem acento, números ou sublinhados. Será exibido como @{username || 'usuario'}.</small><label>E-mail da conta<input value={email} readOnly /></label>{error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}<div className="form-actions"><button className="button button-dark" type="submit" disabled={saving}>{saving ? 'Salvando…' : 'Salvar identificador'}</button><button className="button button-light" type="button" onClick={() => void onSignOut()} disabled={busy}>{busy ? 'Saindo…' : 'Sair da conta'}</button></div></form>}</section>
 }
 
 export default App

@@ -63,3 +63,40 @@
 .settlement-panel h3 { margin: 0 0 8px; font-size: 1rem; }
 .settlement-panel p, .settlement-panel small { color: var(--muted, #777); }
 .settlement-panel > small { display: block; margin-top: 12px; }
+.balance-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px;
+  margin: 18px 0;
+}
+
+.balance-columns > .settlement-panel,
+.category-summary {
+  background: #fff;
+  border: 1px solid #e8e7e2;
+  border-radius: 16px;
+  padding: 20px;
+}
+
+.category-summary {
+  display: grid;
+  gap: 6px;
+}
+
+.category-summary .balance-row {
+  padding: 10px 0;
+  border-bottom: 1px solid #efeee9;
+}
+
+.category-summary .balance-row:last-child {
+  border-bottom: 0;
+}
+
+.form-note {
+  display: grid;
+  gap: 8px;
+}
+
+.expense-row {
+  flex-wrap: wrap;
+}

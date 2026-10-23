@@ -34,7 +34,19 @@ VITE_SUPABASE_PUBLISHABLE_KEY=cole_a_chave_publicavel_localmente
 
 `.env.local` está coberto por `.gitignore`. Não cole a chave no chat, não a coloque em arquivo versionado e nunca use uma chave `sb_secret_...` ou `service_role`. A chave publicável pode aparecer no bundle do navegador por definição; a segurança dos dados depende das políticas RLS. Consulte [a documentação oficial de chaves da API Supabase](https://supabase.com/docs/guides/getting-started/api-keys) se os nomes do painel mudarem.
 
-Após entrar, grupos, participantes, convites, despesas, saldos e sugestões de acerto usam o Supabase. O saldo é pago menos a parte atribuída, calculado em centavos; as sugestões não registram nem confirmam transferências. Qualquer membro pode criar despesas; apenas admins podem editar ou excluir. **Atenção:** o `.env.local` aponta para o projeto remoto `yzxeyqutmvjmrglmpcbb`; qualquer execução local do app com esse arquivo pode gravar nele. Para desenvolvimento sem tocar no remoto, inicie o Supabase local e use URL/chave locais; não use `.env.local` para testes.
+Após entrar, grupos, participantes, convites, despesas, saldos e sugestões de acerto usam o Supabase. Qualquer membro pode criar despesas; apenas admins podem editar ou excluir despesas. Saldos são calculados em centavos e sugestões não registram nem confirmam transferências. **Atenção:** o `.env.local` aponta para o projeto remoto `yzxeyqutmvjmrglmpcbb`; qualquer execução local do app com esse arquivo pode gravar nele. Para desenvolvimento sem tocar no remoto, inicie o Supabase local e use URL/chave locais; não use `.env.local` para testes.
+
+### Etapa local em revisão (2026-10-23)
+
+A implementação da próxima etapa está no workspace e validada contra o Supabase local. Ela ainda não foi publicada. O comportamento aprovado é:
+
+- Qualquer participante pode arquivar ou restaurar um grupo. Admin do grupo ou criador pode excluí-lo definitivamente somente quando não houver despesas; grupos com histórico devem ser arquivados. A regra é aplicada por RPC autorizada no banco.
+- Cada perfil pode escolher um identificador de 3–24 letras ASCII, números ou `_`, normalizado para minúsculas, único sem diferenciar caixa e bloqueado para nomes reservados. A interface usa `@usuario` em participantes, saldos e acertos; o e-mail aparece na autenticação, na página da conta e nos convites.
+- A divisão igual usa a mesma cota arredondada para baixo para todos; qualquer resto fica com quem pagou e aparece como ajuste. Assim, R$ 22,34 / 3 mostra R$ 7,44 por pessoa e R$ 0,02 de ajuste com o pagador. Percentuais somam 100% e centavos residuais vão para os maiores restos fracionários, com desempate pelo ID do usuário. Valores personalizados precisam fechar exatamente em centavos.
+- Despesas podem ter 1–60 parcelas. O valor total é gravado uma vez, o cronograma fecha com ele e cada parcela afeta os saldos no mês do vencimento. O app mostra vencimentos e se a data passou; não registra pagamento de parcela.
+- A tela mostra saldos do mês atual e do período completo ao mesmo tempo, valor devedor líquido a acertar e totais mensais e acumulados por categoria, com filtro de categoria na lista.
+
+Migrations e asserções foram executadas somente no Supabase local; a migration `20261023000100_etapa_6_perfis_rateios_parcelas_e_grupos.sql` está ausente do histórico remoto. Em 2026-10-23, a consulta somente de leitura ao histórico remoto confirmou que 001/002/004/005 estão aplicadas no projeto `yzxeyqutmvjmrglmpcbb` (SplitUai, São Paulo). Não houve `db push`, envio de convite, alteração remota, push ou publicação. A fase de release precisa aplicar o banco primeiro e confirmar o histórico remoto antes de publicar o frontend.
 
 ## Publicação
 

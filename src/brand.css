@@ -1,0 +1,17 @@
+@import url('https://fonts.googleapis.com/css2?family=Permanent+Marker&display=swap');
+
+.brand svg.brand-mark {
+  width: 29px;
+  height: 29px;
+  flex: none;
+  display: block;
+  border-radius: 0;
+  background: none;
+}
+
+.brand-name {
+  display: inline-block;
+  font: 400 19px 'Permanent Marker', 'Comic Sans MS', cursive;
+  letter-spacing: -0.45px;
+  transform: rotate(-2deg);
+}

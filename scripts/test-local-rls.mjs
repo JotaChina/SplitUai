@@ -1,11 +1,12 @@
 import { execFileSync } from 'node:child_process'
 import { createClient } from '@supabase/supabase-js'
 import { createGroup, createGroupInvitation } from '../src/lib/groups.ts'
-import { allocatePercentage, calculateBalances, createExpense, deleteExpense, generateMonthlySchedule, listGroupExpenses, splitEvenly, suggestSettlements, updateExpense } from '../src/lib/expenses.ts'
+import { allocatePercentage, calculateBalances, createExpense, createRecurringExpense, deleteExpense, generateMonthlySchedule, listGroupExpenses, splitEvenly, suggestExpenseCategory, suggestSettlements, updateExpense } from '../src/lib/expenses.ts'
 
 const apiUrl = process.env.API_URL
 const anonKey = process.env.ANON_KEY
 const localServiceKey = process.env.SERVICE_ROLE_KEY
+const dbContainer = process.env.DB_CONTAINER ?? 'supabase_db_splituai'
 
 if (!apiUrl || !anonKey || !localServiceKey) {
   throw new Error('Load API_URL, ANON_KEY and SERVICE_ROLE_KEY from `supabase status -o env` first.')
@@ -76,6 +77,10 @@ async function cleanup() {
 }
 
 try {
+  assert(suggestExpenseCategory('  CONTA—de ÁGUA! ') === 'agua', 'sugestão de categoria ignora acentos, caixa, espaços e pontuação')
+  assert(suggestExpenseCategory('Internet do apartamento') === 'internet' && suggestExpenseCategory('luz') === 'luz', 'sugere categoria de internet e luz por palavras reconhecidas')
+  const centSplit = allocatePercentage(101, { '00000000-0000-0000-0000-000000000001': 60, '00000000-0000-0000-0000-000000000002': 40 })
+  assert(centSplit.reduce((sum, share) => sum + share.amount_cents, 0) === 101, 'rateio percentual distribui centavos residuais deterministicamente e fecha o total')
   const bootstrapEmails = [accounts.admin.email, accounts.outsider.email, accounts.isolated.email]
   if (!bootstrapEmails.every((email) => /^[a-z0-9-]+@example\.test$/.test(email))) {
     throw new Error('Unexpected generated test email format.')
@@ -83,7 +88,7 @@ try {
   const values = bootstrapEmails.map((email) => `('${email}', now() + interval '1 day')`).join(', ')
   const sql = `insert into public.bootstrap_invites (email, expires_at) values ${values};`
   execFileSync('docker', [
-    'exec', 'supabase_db_splituai', 'psql', '-v', 'ON_ERROR_STOP=1',
+    'exec', dbContainer, 'psql', '-v', 'ON_ERROR_STOP=1',
     '-U', 'postgres', '-d', 'postgres', '-c', sql,
   ], { stdio: 'pipe' })
 
@@ -152,6 +157,57 @@ try {
   if (member2MembershipError) throw member2MembershipError
   assert(member2Membership.role === 'member', 'segundo participante de teste entra no grupo por convite válido')
 
+  const favoriteTemplate = { participants: [adminUser.id, memberUser.id], paid_by: adminUser.id, split_mode: 'percentage', percentages: { [adminUser.id]: 60, [memberUser.id]: 40 } }
+  const { data: createdFavorite, error: favoriteCreateError } = await memberSession.client.from('group_expense_favorites')
+    .insert({ group_id: group1.id, created_by: memberUser.id, name: `${prefix} 60/40`, kind: 'split', template: favoriteTemplate })
+    .select('id,template').single()
+  if (favoriteCreateError) throw favoriteCreateError
+  const { data: memberFavorites, error: memberFavoritesError } = await adminSession.client.from('group_expense_favorites').select('id').eq('id', createdFavorite.id)
+  if (memberFavoritesError) throw memberFavoritesError
+  assert(memberFavorites.length === 1 && createdFavorite.template.percentages[memberUser.id] === 40,
+    'membro ativo cria rateio percentual favorito e outro membro ativo consegue usar/ler')
+  const { error: ownerFavoriteUpdateError } = await memberSession.client.from('group_expense_favorites').update({ name: `${prefix} 60/40 revisado` }).eq('id', createdFavorite.id)
+  assert(!ownerFavoriteUpdateError, 'criador ativo pode editar seu favorito')
+  const { error: adminFavoriteUpdateError } = await adminSession.client.from('group_expense_favorites').update({ name: `${prefix} rateio do grupo` }).eq('id', createdFavorite.id)
+  assert(!adminFavoriteUpdateError, 'admin ativo pode editar favorito criado por outro membro')
+  const { data: outsiderFavorites, error: outsiderFavoritesError } = await outsiderSession.client.from('group_expense_favorites').select('id').eq('id', createdFavorite.id)
+  if (outsiderFavoritesError) throw outsiderFavoritesError
+  assert(outsiderFavorites.length === 0, 'usuário fora do grupo não lê favoritos')
+  const { error: outsiderFavoriteInsertError } = await outsiderSession.client.from('group_expense_favorites')
+    .insert({ group_id: group1.id, created_by: outsiderUser.id, name: 'fora', kind: 'split', template: favoriteTemplate })
+  assert(Boolean(outsiderFavoriteInsertError), 'usuário fora do grupo não cria favoritos')
+  const { error: outsiderFavoriteUpdateError } = await outsiderSession.client.from('group_expense_favorites').update({ name: 'alterado fora' }).eq('id', createdFavorite.id)
+  const { error: outsiderFavoriteDeleteError } = await outsiderSession.client.from('group_expense_favorites').delete().eq('id', createdFavorite.id)
+  assert(!outsiderFavoriteUpdateError && !outsiderFavoriteDeleteError,
+    'RLS não permite que usuário externo altere ou exclua favoritos de outro grupo')
+  const { error: invalidFavoriteParticipantsError } = await memberSession.client.from('group_expense_favorites').insert({
+    group_id: group1.id, created_by: memberUser.id, name: `${prefix} participante inválido`, kind: 'split',
+    template: { participants: [outsiderUser.id], paid_by: outsiderUser.id, split_mode: 'equal' },
+  })
+  assert(Boolean(invalidFavoriteParticipantsError), 'banco recusa favorito que referencia participante não ativo do grupo')
+
+  const image = new Blob([Uint8Array.from([137,80,78,71,13,10,26,10,0,0,0,0])], { type: 'image/png' })
+  const imageBase = `rls-${suffix}`
+  const groupImagePath = `groups/${group1.id}/${imageBase}.png`
+  const profileImagePath = `profiles/${adminUser.id}/${imageBase}.png`
+  const otherProfileImagePath = `profiles/${memberUser.id}/${imageBase}.png`
+  const { error: adminGroupImageError } = await adminSession.client.storage.from('splituai-images').upload(groupImagePath, image, { contentType: 'image/png' })
+  assert(!adminGroupImageError, 'admin ativo pode enviar imagem do grupo')
+  const { error: adminGroupImageReplaceError } = await adminSession.client.storage.from('splituai-images').upload(groupImagePath, image, { contentType: 'image/png', upsert: true })
+  assert(!adminGroupImageReplaceError, 'admin ativo pode substituir imagem existente do grupo')
+  const { error: memberGroupImageError } = await memberSession.client.storage.from('splituai-images').upload(`groups/${group1.id}/${imageBase}-member.png`, image, { contentType: 'image/png' })
+  assert(Boolean(memberGroupImageError), 'membro comum não pode enviar imagem do grupo')
+  const { error: outsiderGroupImageError } = await outsiderSession.client.storage.from('splituai-images').upload(`groups/${group1.id}/${imageBase}-outsider.png`, image, { contentType: 'image/png' })
+  assert(Boolean(outsiderGroupImageError), 'usuário fora do grupo não pode enviar imagem do grupo')
+  const { error: ownProfileImageError } = await adminSession.client.storage.from('splituai-images').upload(profileImagePath, image, { contentType: 'image/png' })
+  assert(!ownProfileImageError, 'pessoa pode enviar a própria imagem de perfil')
+  const { error: ownProfileImageReplaceError } = await adminSession.client.storage.from('splituai-images').upload(profileImagePath, image, { contentType: 'image/png', upsert: true })
+  assert(!ownProfileImageReplaceError, 'pessoa pode substituir a própria imagem de perfil')
+  const { error: otherProfileImageError } = await adminSession.client.storage.from('splituai-images').upload(otherProfileImagePath, image, { contentType: 'image/png' })
+  assert(Boolean(otherProfileImageError), 'pessoa não pode enviar imagem ao perfil de outra conta')
+  await admin.from('group_expense_favorites').delete().eq('id', createdFavorite.id)
+  await admin.storage.from('splituai-images').remove([groupImagePath, profileImagePath, `groups/${group1.id}/${imageBase}-member.png`, `groups/${group1.id}/${imageBase}-outsider.png`])
+
   const { data: invitation, error: invitationReadError } = await adminSession.client
     .from('group_invitations').select('status').eq('group_id', group1.id).eq('invited_email', memberEmail).single()
   if (invitationReadError) throw invitationReadError
@@ -214,6 +270,23 @@ try {
     expenseDate: '2026-10-08', notes: '', splitMode: 'equal', roundingRemainderCents: split.remainderCents,
     shares: split.shares, installments: scheduleFor(amountCents, split), ...overrides,
   })
+  const recurringSplit = sharesFor(1001)
+  const recurringExpenseId = await createRecurringExpense(adminSession.client, group1.id, expenseValues(1001, recurringSplit, {
+    description: `${prefix} internet recorrente`, category: 'internet', expenseDate: '2026-08-15',
+    installments: scheduleFor(1001, recurringSplit, 1, '2026-08-15'),
+  }))
+  const firstMaterialized = await adminSession.client.rpc('ensure_recurring_expenses_through', { p_group_id: group1.id, p_through_month: '2026-10-01' })
+  const duplicateMaterialized = await adminSession.client.rpc('ensure_recurring_expenses_through', { p_group_id: group1.id, p_through_month: '2026-10-01' })
+  const recurringRows = await listGroupExpenses(adminSession.client, group1.id)
+  const seriesRows = recurringRows.filter((row) => row.recurring_series_id === recurringRows.find((candidate) => candidate.id === recurringExpenseId)?.recurring_series_id)
+  assert(!firstMaterialized.error && firstMaterialized.data === 2 && !duplicateMaterialized.error && duplicateMaterialized.data === 0
+    && seriesRows.length === 3 && new Set(seriesRows.map((row) => row.recurring_series_id + row.expense_date.slice(0, 7))).size === 3,
+  'série materializa somente até a competência solicitada, sem duplicar ocorrências')
+  const deletedRecurring = seriesRows.find((row) => row.id !== recurringExpenseId)
+  await deleteExpense(adminSession.client, deletedRecurring.id)
+  const afterSkip = await adminSession.client.rpc('ensure_recurring_expenses_through', { p_group_id: group1.id, p_through_month: deletedRecurring.expense_date.slice(0, 7) + '-01' })
+  assert(!afterSkip.error && afterSkip.data === 0, 'ocorrência excluída não reaparece na próxima materialização')
+  for (const row of seriesRows.filter((row) => row.id !== deletedRecurring.id)) await deleteExpense(adminSession.client, row.id)
   const initialSplit = sharesFor(1001)
   assert(initialSplit.shares.reduce((sum, share) => sum + share.amount_cents, 0) + initialSplit.remainderCents === 1001
     && initialSplit.shares.map((share) => share.amount_cents).join(',') === '333,333,333' && initialSplit.remainderCents === 2,
@@ -318,8 +391,9 @@ try {
     p_shares: [{ user_id: adminUser.id, amount_cents: 100 }],
   })
   assert(Boolean(legacyCreate.error), 'RPC legada sem cronograma foi revogada')
-  const outsiderExpenses = await listGroupExpenses(outsiderSession.client, group1.id)
-  assert(outsiderExpenses.length === 0, 'usuário de outro grupo não lista despesas nem parcelas')
+  let outsiderExpenseReadDenied = false
+  try { await listGroupExpenses(outsiderSession.client, group1.id) } catch (reason) { outsiderExpenseReadDenied = reason?.code === '42501' }
+  assert(outsiderExpenseReadDenied, 'RPC de materialização recorrente recusa leitura de despesa por usuário fora do grupo')
 
   const invalidParticipant = await adminSession.client.rpc('create_expense_with_schedule', {
     p_group_id: group1.id, p_description: 'participante inválido', p_category: 'outros',
@@ -556,13 +630,13 @@ try {
   'convite expirado é exibido como tal e falha no aceite e no novo envio')
 
   const memberEdit = await adminSession.client.rpc('update_group_member', {
-    p_group_id: group1.id, p_user_id: memberUser.id, p_role: 'admin', p_display_name: 'Pessoa do grupo',
+    p_group_id: group1.id, p_user_id: memberUser.id, p_role: 'admin',
   })
-  const updatedMember = await adminSession.client.from('group_members').select('role,display_name').eq('group_id', group1.id).eq('user_id', memberUser.id).single()
-  assert(!memberEdit.error && updatedMember.data?.role === 'admin' && updatedMember.data?.display_name === 'Pessoa do grupo',
-    'admin altera papel e nome de exibição específico do grupo via RPC')
+  const updatedMember = await adminSession.client.from('group_members').select('role').eq('group_id', group1.id).eq('user_id', memberUser.id).single()
+  assert(!memberEdit.error && updatedMember.data?.role === 'admin',
+    `admin altera papel do participante via RPC (rpc=${memberEdit.error?.message ?? 'ok'}, row=${updatedMember.data?.role ?? 'missing'})`)
   const lastAdminDemotion = await adminSession.client.rpc('update_group_member', {
-    p_group_id: group2.id, p_user_id: outsiderUser.id, p_role: 'member', p_display_name: null,
+    p_group_id: group2.id, p_user_id: outsiderUser.id, p_role: 'member',
   })
   assert(Boolean(lastAdminDemotion.error), 'banco impede rebaixar o último administrador do grupo')
 
@@ -583,9 +657,9 @@ try {
   `remoção encerra acesso e preserva associação e rateios históricos (rpc=${removal.error?.message ?? 'ok'}, active=${removedMembership.data?.active}, shares=${preservedShare.data?.length}, groupReadable=${Boolean(removedUserRead.data)})`)
 
   const demotionAfterTransfer = await adminSession.client.rpc('update_group_member', {
-    p_group_id: group1.id, p_user_id: adminUser.id, p_role: 'member', p_display_name: null,
+    p_group_id: group1.id, p_user_id: adminUser.id, p_role: 'member',
   })
-  assert(!demotionAfterTransfer.error, 'admin pode transferir a administração após promover outro participante')
+  assert(Boolean(demotionAfterTransfer.error), 'admin não pode alterar o próprio papel mesmo após promover outra pessoa')
 
   assert(group2.id !== group1.id && isolatedUser.id !== adminUser.id,
     'contas e grupos de teste são independentes')

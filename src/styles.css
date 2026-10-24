@@ -197,6 +197,7 @@
 .settlement-status{display:inline-flex;align-items:center;margin-left:8px;padding:3px 8px;border-radius:999px;font-size:9px;font-style:normal;font-weight:700;vertical-align:middle}
 .settlement-status-pending{background:#fff1d8;color:#81570d}.settlement-status-paid{background:#eaf3de;color:#436b2b}
 .settlement-pending{background:#fffaf0;color:#594a2a}.settlement-pending>span strong{color:#594a2a}.settlement-confirm{min-height:34px;padding:0 10px;font-size:10px;white-space:nowrap}
+.favorite-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:10px}.favorite-controls select{min-width:180px;min-height:38px;border:1px solid #e1e4db;border-radius:8px;background:#fff;padding:0 10px;color:#343a30;font:400 11px 'DM Sans',sans-serif}.favorite-controls .button{min-height:38px;padding:0 12px;font-size:10px}
 button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible{outline:3px solid #587a36;outline-offset:3px}
 button:disabled{cursor:not-allowed;opacity:.62}
 @media(max-width:700px){

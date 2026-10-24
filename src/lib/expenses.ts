@@ -62,6 +62,27 @@ export type ExpenseInput = {
 export type GroupBalance = { user_id: string; balance_cents: number }
 export type SettlementSuggestion = { from_user_id: string; to_user_id: string; amount_cents: number }
 
+export function suggestExpenseCategory(title: string): ExpenseCategory | null {
+  const normalized = title.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR')
+    .replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
+  const rules: Array<[ExpenseCategory, RegExp]> = [
+    ['internet', /\b(internet|wifi|wi fi|banda larga)\b/],
+    ['agua', /\b(agua|saneamento|hidraulica)\b/],
+    ['luz', /\b(luz|energia eletrica|eletricidade)\b/],
+    ['aluguel', /\b(aluguel|locacao)\b/],
+    ['iptu', /\biptu\b/],
+    ['transporte_gasolina', /\b(gasolina|combustivel|etanol|diesel)\b/],
+    ['transporte_onibus', /\b(onibus|metro|trem)\b/],
+    ['transporte_aviao', /\b(aviao|passagem aerea|voo)\b/],
+    ['transporte_pedagio', /\b(pedagio)\b/],
+    ['transporte_corrida_app', /\b(uber|taxi|corrida de app)\b/],
+    ['alimentacao', /\b(mercado|supermercado|restaurante|almoco|jantar|cafe da manha|comida)\b/],
+    ['hospedagem', /\b(hotel|hospedagem|hostel|pousada)\b/],
+    ['streaming', /\b(streaming|netflix|spotify|disney|prime video)\b/],
+  ]
+  return rules.find(([, pattern]) => pattern.test(normalized))?.[0] ?? null
+}
+
 export function calculateBalances(expenses: ExpenseRecord[], memberIds: string[], month?: string, settlements: SettlementRecord[] = []): GroupBalance[] {
   const balances = new Map<string, bigint>([...new Set(memberIds)].map((id) => [id, 0n]))
   const add = (id: string, cents: bigint) => {

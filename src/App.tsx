@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
+import './brand.css'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from './lib/supabase'
 import {
@@ -49,6 +50,7 @@ import {
   type SettlementRecord,
   type SettlementPaymentMethod,
   importSplitwiseHistory,
+  suggestExpenseCategory,
 } from './lib/expenses'
 import { parseSplitwiseCsv, type SplitwiseCsvPreview } from './lib/splitwiseCsv'
 
@@ -123,10 +125,12 @@ function downloadGroupCsv(groupName: string, start: string, end: string, expense
 
 function BrandMark() {
   return <svg className="brand-mark" viewBox="0 0 40 40" role="img" aria-label="Símbolo do SplitUai">
-    <rect width="40" height="40" rx="13" fill="#c8ed83" />
-    <path d="M20 7.5 33 31H7L20 7.5Z" fill="#c9443e" />
-    <path d="M20 13.1 28.1 27.5H11.9L20 13.1Z" fill="#c8ed83" />
-    <circle cx="20" cy="22.2" r="2.15" fill="#293124" />
+    <rect width="40" height="40" rx="13" fill="#252a25" />
+    <path d="m20 5.8 12.7 23.5H7.3L20 5.8Z" fill="#d83e36" />
+    <path d="m4.3 13.7 6.1 3.7M4.8 20.9l5.2.3m19.7-5.2 5.7-3.5m-4.9 10.2 5.2.7" fill="none" stroke="#79efa7" strokeWidth="2.1" strokeLinecap="round" />
+    <circle cx="20" cy="22.4" r="2.1" fill="#fff8e8" />
+    <circle cx="11.8" cy="8.1" r=".9" fill="#79efa7" />
+    <circle cx="30.1" cy="32.7" r=".9" fill="#79efa7" />
   </svg>
 }
 
@@ -269,7 +273,7 @@ function App() {
       <aside className="sidebar">
         <a className="brand" href="#inicio" onClick={(event) => { event.preventDefault(); setPage('groups') }}>
           <BrandMark />
-          <span>split<span className="brand-accent">uai</span></span>
+          <span className="brand-name">split<span className="brand-accent">uai</span></span>
         </a>
         <div className="side-label">MENU</div>
         <nav className="main-nav" aria-label="Navegação principal">
@@ -740,6 +744,7 @@ function Expense({ client, groupId, groupName, userId, expense, onBack, onSaved 
   const activeMembers = members.filter((member) => member.active)
   const includesFormerParticipant = Boolean(expense && [expense.paid_by, ...expense.shares.map((share) => share.user_id)].some((id) => members.some((member) => member.user_id === id && !member.active)))
   const [description, setDescription] = useState(expense?.description ?? '')
+  const [categoryManuallySelected, setCategoryManuallySelected] = useState(Boolean(expense))
   const [amount, setAmount] = useState(expense ? `${Math.floor(expense.amount_cents / 100)},${String(expense.amount_cents % 100).padStart(2, '0')}` : '')
   const [paidBy, setPaidBy] = useState(expense?.paid_by ?? userId)
   const [category, setCategory] = useState<ExpenseCategory>(expense?.category ?? 'outros')
@@ -755,12 +760,24 @@ function Expense({ client, groupId, groupName, userId, expense, onBack, onSaved 
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [favoriteRows, setFavoriteRows] = useState<Array<{ id: string; name: string; kind: 'split' | 'expense'; template: Record<string, unknown> }>>([])
+  const [favoriteName, setFavoriteName] = useState('')
+  const [selectedFavoriteId, setSelectedFavoriteId] = useState('')
+  const [favoriteNotice, setFavoriteNotice] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (expense || categoryManuallySelected) return
+    const suggestion = suggestExpenseCategory(description)
+    if (suggestion) setCategory(suggestion)
+  }, [description, expense, categoryManuallySelected])
 
   useEffect(() => {
     let active = true
-    void getGroupMembers(client, groupId).then((rows) => {
+    void Promise.all([getGroupMembers(client, groupId), client.from('group_expense_favorites').select('id,name,kind,template').eq('group_id', groupId).order('name')]).then(([rows, favorites]) => {
       if (!active) return
       setMembers(rows)
+      if (favorites.error && favorites.error.code !== '42P01') throw favorites.error
+      setFavoriteRows((favorites.data ?? []) as typeof favoriteRows)
       if (!expense) {
         const currentMembers = rows.filter((member) => member.active)
         setParticipantIds(currentMembers.map((member) => member.user_id))
@@ -787,6 +804,75 @@ function Expense({ client, groupId, groupName, userId, expense, onBack, onSaved 
     })
     if (shares.reduce((sum, share) => sum + share.amount_cents, 0) !== amountCents) throw new Error('Os valores individuais precisam somar exatamente o total.')
     return { shares, remainderCents: 0 }
+  }
+
+  function saveFavorite(kind: 'split' | 'expense') {
+    const name = favoriteName.trim()
+    if (!name) { setFavoriteNotice('Informe um nome para o favorito.'); return }
+    try {
+      const percentages = Object.fromEntries(participantIds.map((id) => [id, Number(percentageInputs[id] ?? 0)]))
+      if (splitMode === 'percentage') allocatePercentage(100, percentages)
+      const customCents = Object.fromEntries(participantIds.map((id) => {
+        const value = (customInputs[id] ?? '0,00').trim()
+        return [id, /^0+(?:[,.]0{1,2})?$/.test(value) ? 0 : parseBrlCents(value)]
+      }))
+      if (splitMode === 'custom' && amount.trim()) {
+        const totalCents = parseBrlCents(amount)
+        if (Object.values(customCents).reduce((sum, value) => sum + value, 0) !== totalCents) throw new Error('Os valores individuais precisam somar exatamente o total.')
+      }
+      if (kind === 'expense') makeShares(parseBrlCents(amount))
+      const template: Record<string, unknown> = {
+        participants: participantIds, paid_by: paidBy, split_mode: splitMode,
+        percentages, custom_cents: customCents,
+      }
+      if (kind === 'expense') Object.assign(template, {
+        description: description.trim(), category, amount_cents: parseBrlCents(amount), notes: notes.trim(), recurring,
+        installment_count: recurring ? 1 : Number(installmentCount),
+      })
+      void (async () => {
+        const favorite = favoriteRows.find((row) => row.id === selectedFavoriteId)
+        const request = favorite
+          ? client.from('group_expense_favorites').update({ name, kind, template }).eq('id', favorite.id)
+          : client.from('group_expense_favorites').insert({ group_id: groupId, created_by: userId, name, kind, template })
+        const { data, error: insertError } = await request.select('id,name,kind,template').single()
+          if (insertError) throw insertError
+          setFavoriteRows((current) => [...current.filter((row) => row.id !== (data as typeof favoriteRows[number]).id), data as typeof favoriteRows[number]].sort((a, b) => a.name.localeCompare(b.name)))
+          setFavoriteName(''); setSelectedFavoriteId(''); setFavoriteNotice(`Favorito “${name}” ${favorite ? 'atualizado' : 'salvo'} neste grupo.`)
+      })().catch((reason: unknown) => setFavoriteNotice(reason instanceof Error ? reason.message : 'Não foi possível salvar o favorito.'))
+    } catch (reason) { setFavoriteNotice(reason instanceof Error ? reason.message : 'Revise os dados do favorito.') }
+  }
+
+  function applyFavorite(id: string) {
+    const favorite = favoriteRows.find((row) => row.id === id)
+    if (!favorite) return
+    setSelectedFavoriteId(favorite.id)
+    setFavoriteName(favorite.name)
+    const t = favorite.template
+    const ids = (Array.isArray(t.participants) ? t.participants : []).filter((value): value is string => typeof value === 'string' && activeMembers.some((member) => member.user_id === value))
+    if (!ids.length) { setFavoriteNotice('As pessoas salvas neste favorito não estão mais ativas no grupo.'); return }
+    setParticipantIds(ids)
+    if (typeof t.paid_by === 'string' && activeMembers.some((member) => member.user_id === t.paid_by)) setPaidBy(t.paid_by)
+    if (t.split_mode === 'equal' || t.split_mode === 'percentage' || t.split_mode === 'custom') setSplitMode(t.split_mode)
+    if (t.percentages && typeof t.percentages === 'object') setPercentageInputs(Object.fromEntries(Object.entries(t.percentages).map(([key, value]) => [key, String(value)])))
+    if (t.custom_cents && typeof t.custom_cents === 'object') setCustomInputs(Object.fromEntries(Object.entries(t.custom_cents).map(([key, value]) => [key, `${Math.floor(Number(value) / 100)},${String(Number(value) % 100).padStart(2, '0')}`])))
+    if (favorite.kind === 'expense') {
+      if (typeof t.description === 'string') setDescription(t.description)
+      if (typeof t.category === 'string') { setCategory(t.category as ExpenseCategory); setCategoryManuallySelected(true) }
+      if (typeof t.amount_cents === 'number') setAmount(`${Math.floor(t.amount_cents / 100)},${String(t.amount_cents % 100).padStart(2, '0')}`)
+      if (typeof t.notes === 'string') setNotes(t.notes)
+      setRecurring(t.recurring === true)
+      setInstallmentCount(String(t.installment_count ?? 1))
+    }
+    setFavoriteNotice(`Favorito “${favorite.name}” aplicado.`)
+  }
+
+  async function deleteFavorite() {
+    if (!selectedFavoriteId) return
+    const id = selectedFavoriteId
+    const { data: deletedFavorite, error: deleteError } = await client.from('group_expense_favorites').delete().eq('id', id).select('id').maybeSingle()
+    if (deleteError || !deletedFavorite) { setFavoriteNotice(deleteError?.message ?? 'Somente quem criou o favorito ou um admin ativo pode excluí-lo.'); return }
+    setFavoriteRows((current) => current.filter((row) => row.id !== id))
+    setSelectedFavoriteId(''); setFavoriteName(''); setFavoriteNotice('Favorito excluído.')
   }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
@@ -821,9 +907,10 @@ function Expense({ client, groupId, groupName, userId, expense, onBack, onSaved 
   const installmentsPreview = parsedAmount && preview && !previewError ? generateMonthlySchedule(parsedAmount, Number(installmentCount), firstDueDate, preview.shares, preview.remainderCents) : []
 
   return <section className="page-wrap form-wrap"><button className="back-link" onClick={onBack}>← Voltar ao grupo</button><div className="eyebrow">{groupName}</div><h1>{expense ? 'Editar despesa' : 'Nova despesa'}<span className="heading-dot">.</span></h1><p className="form-intro">Registre o gasto, escolha como dividir e confira as parcelas antes de salvar.</p>{includesFormerParticipant && <p className="invite-help">Esta despesa inclui participante removido. O registro e as parcelas foram preservados e não podem ser recalculados.</p>}{loading ? <p className="auth-loading">Carregando participantes…</p> : <form onSubmit={(event) => void submit(event)}>
-    <label>Descrição<input value={description} onChange={(event) => setDescription(event.target.value)} maxLength={200} required placeholder="Ex.: almoço na praia" disabled={busy} /></label>
+    {favoriteRows.length > 0 && <label>Usar ou editar favorito deste grupo<select value={selectedFavoriteId} onChange={(event) => applyFavorite(event.target.value)}><option value="">Escolha um favorito</option>{favoriteRows.map((row) => <option key={row.id} value={row.id}>{row.name} · {row.kind === 'split' ? 'rateio' : 'despesa'}</option>)}</select></label>}
+    <label>Descrição<input value={description} onChange={(event) => setDescription(event.target.value)} maxLength={200} required placeholder="Ex.: almoço na praia" disabled={busy} />{!expense && suggestExpenseCategory(description) && !categoryManuallySelected && <small role="status">Categoria sugerida: {categoryLabels[suggestExpenseCategory(description)!]}. Você pode alterar abaixo.</small>}</label>
     <div className="form-two"><label>Valor total<div className="money-input"><span>R$</span><input value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" required placeholder="0,00" disabled={busy} /></div></label><label>Quem pagou?<select value={paidBy} onChange={(event) => setPaidBy(event.target.value)} required disabled={busy}><option value="" disabled>Selecione</option>{activeMembers.map((member) => <option key={member.user_id} value={member.user_id}>{memberLabel(member)}{member.user_id === userId ? ' (você)' : ''}</option>)}</select></label></div>
-    <div className="form-two"><label>Categoria<select value={category} onChange={(event) => setCategory(event.target.value as ExpenseCategory)} disabled={busy}><optgroup label="Categorias principais"><option value="alimentacao">🍴 Alimentação</option><option value="hospedagem">🏡 Hospedagem</option><option value="corrida">🍁 Corrida</option><option value="atividades">🎟️ Atividades</option><option value="outros">✳ Outros</option><option value="viagens">🧳 Viagens</option><option value="streaming">📺 Streaming</option><option value="fitness">🏋️ Fitness</option><option value="fatura_cartao">💳 Fatura de cartão</option><option value="acerto_outros_grupos">↔️ Acerto de outros grupos</option></optgroup><optgroup label="Contas da Casa"><option value="aluguel">🏠 Aluguel</option><option value="luz">💡 Luz</option><option value="agua">💧 Água</option><option value="iptu">🏛️ IPTU</option><option value="internet">🌐 Internet</option></optgroup><optgroup label="Transporte · categorias atuais">{transportCategories.map((key) => <option key={key} value={key}>{categoryEmojis[key]} {categoryLabels[key]}</option>)}</optgroup>{expense?.category === 'transporte' && <optgroup label="Transporte · registro antigo"><option value="transporte">🚗 Transporte (categoria antiga)</option></optgroup>}</select></label><label>Data da despesa<input type="date" value={expenseDate} onChange={(event) => setExpenseDate(event.target.value)} required disabled={busy || Boolean(expense?.recurring_series_id)} /></label></div>
+    <div className="form-two"><label>Categoria<select value={category} onChange={(event) => { setCategory(event.target.value as ExpenseCategory); setCategoryManuallySelected(true) }} disabled={busy}><optgroup label="Categorias principais"><option value="alimentacao">🍴 Alimentação</option><option value="hospedagem">🏡 Hospedagem</option><option value="corrida">🍁 Corrida</option><option value="atividades">🎟️ Atividades</option><option value="outros">✳ Outros</option><option value="viagens">🧳 Viagens</option><option value="streaming">📺 Streaming</option><option value="fitness">🏋️ Fitness</option><option value="fatura_cartao">💳 Fatura de cartão</option><option value="acerto_outros_grupos">↔️ Acerto de outros grupos</option></optgroup><optgroup label="Contas da Casa"><option value="aluguel">🏠 Aluguel</option><option value="luz">💡 Luz</option><option value="agua">💧 Água</option><option value="iptu">🏛️ IPTU</option><option value="internet">🌐 Internet</option></optgroup><optgroup label="Transporte · categorias atuais">{transportCategories.map((key) => <option key={key} value={key}>{categoryEmojis[key]} {categoryLabels[key]}</option>)}</optgroup>{expense?.category === 'transporte' && <optgroup label="Transporte · registro antigo"><option value="transporte">🚗 Transporte (categoria antiga)</option></optgroup>}</select></label><label>Data da despesa<input type="date" value={expenseDate} onChange={(event) => setExpenseDate(event.target.value)} required disabled={busy || Boolean(expense?.recurring_series_id)} /></label></div>
     <label>Forma de divisão<select value={splitMode} onChange={(event) => setSplitMode(event.target.value as SplitMode)} disabled={busy}><option value="equal">Igualmente</option><option value="percentage">Por porcentagem</option><option value="custom">Valores definidos por pessoa</option></select></label>
     <fieldset className="participant-picker"><legend>Participantes</legend>{activeMembers.map((member) => <label key={member.user_id}><input type="checkbox" checked={participantIds.includes(member.user_id)} onChange={(event) => { const ids = event.target.checked ? [...participantIds, member.user_id] : participantIds.filter((id) => id !== member.user_id); setParticipantIds(ids); if (event.target.checked) { const equal = ids.length ? 100 / ids.length : 0; setPercentageInputs((current) => Object.fromEntries(ids.map((id) => [id, current[id] ?? String(equal)]))) } }} disabled={busy} /><span>{memberLabel(member)}{member.user_id === userId ? ' (você)' : ''}</span></label>)}</fieldset>
     {splitMode === 'percentage' && participantIds.map((id) => <label key={id}>{memberLabel(members.find((member) => member.user_id === id)!)} · porcentagem<input type="number" min="0" max="100" step="0.01" value={percentageInputs[id] ?? ''} onChange={(event) => setPercentageInputs((current) => ({ ...current, [id]: event.target.value }))} disabled={busy} /></label>)}
@@ -835,6 +922,7 @@ function Expense({ client, groupId, groupName, userId, expense, onBack, onSaved 
     <div className="form-two">{!recurring && <label>Quantidade de parcelas<input type="number" min="1" max="60" step="1" value={installmentCount} onChange={(event) => setInstallmentCount(event.target.value)} required disabled={busy || recurring} /></label>}<label>{recurring ? 'Data da primeira ocorrência' : 'Primeiro vencimento'}<input type="date" value={firstDueDate} onChange={(event) => { setFirstDueDate(event.target.value); if (recurring) setExpenseDate(event.target.value) }} required disabled={busy || Boolean(expense?.recurring_series_id)} /></label></div>
     <label>Observações (opcional)<textarea value={notes} onChange={(event) => setNotes(event.target.value)} maxLength={2000} rows={2} disabled={busy} /></label>
     {preview && !previewError && <div className="form-note"><strong>Prévia do rateio</strong>{preview.shares.map((share) => <div key={share.user_id}>{memberLabel(members.find((member) => member.user_id === share.user_id)!)}: {formatBrlCents(share.amount_cents)}</div>)}{preview.remainderCents > 0 && <p>Ajuste de {formatBrlCents(preview.remainderCents)} fica com quem pagou.</p>}<strong>Cronograma</strong>{installmentsPreview.map((part) => <div key={part.installment_number}>Parcela {part.installment_number}/{installmentsPreview.length}: {formatBrlCents(part.amount_cents)} · vence {new Date(`${part.due_date}T12:00:00`).toLocaleDateString('pt-BR')}</div>)}</div>}
+    <fieldset className="favorite-controls"><legend>Favoritos do grupo</legend><label>Nome do favorito<input value={favoriteName} onChange={(event) => setFavoriteName(event.target.value)} maxLength={80} placeholder="Ex.: divisão casa 60/40" /></label><div className="form-actions"><button type="button" className="button button-light" onClick={() => saveFavorite('split')} disabled={busy || !participantIds.length}>{selectedFavoriteId ? 'Atualizar rateio' : 'Salvar rateio'}</button><button type="button" className="button button-light" onClick={() => saveFavorite('expense')} disabled={busy || !participantIds.length}>{selectedFavoriteId ? 'Atualizar despesa' : 'Salvar despesa'}</button>{selectedFavoriteId && <button type="button" className="button button-light" onClick={() => void deleteFavorite()}>Excluir favorito</button>}</div><small>Todos os membros ativos podem usar. Quem criou ou um admin ativo pode atualizar e excluir; favoritos guardam apenas referências a participantes ativos.</small>{favoriteNotice && <p role="status">{favoriteNotice}</p>}</fieldset>
     {previewError && <p className="auth-error" role="alert">{previewError}</p>}{error && <p className="auth-error" role="alert">{error}</p>}
     <div className="form-actions"><button type="button" className="button button-light" onClick={onBack} disabled={busy}>Cancelar</button><button type="submit" className="button button-dark" disabled={busy || activeMembers.length === 0 || !preview || Boolean(previewError) || includesFormerParticipant}>{busy ? 'Salvando…' : expense ? 'Salvar alterações' : 'Salvar despesa'} <span>→</span></button></div>
   </form>}</section>
@@ -854,7 +942,7 @@ function Login({ configured, onSignIn, busy, error }: {
     void onSignIn(email.trim(), password)
   }
 
-  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><BrandMark /><span>split<span className="brand-accent">uai</span></span></div><div className="eyebrow">BEM-VINDE DE VOLTA</div><h1>Que bom te ver<span className="heading-dot">.</span></h1><p className="form-intro">Entre na sua conta para continuar dividindo.</p><form onSubmit={submit}><label>Seu e-mail<input type="email" autoComplete="username" placeholder="voce@email.com" value={email} onChange={(event) => setEmail(event.target.value)} required disabled={!configured || busy} /></label><label>Senha<input type="password" autoComplete="current-password" placeholder="Sua senha" value={password} onChange={(event) => setPassword(event.target.value)} required disabled={!configured || busy} /></label><button className="button button-dark full-button" type="submit" disabled={!configured || busy}>{busy ? 'Entrando…' : 'Entrar'} <span>→</span></button>{!configured && <p className="auth-message" role="status">Autenticação não configurada neste ambiente. Novas contas continuam disponíveis somente por convite.</p>}{error && <p className="auth-error" role="alert">{error}</p>}<div className="login-footnote">O SplitUai é privado. O acesso é feito por convite; não há cadastro público.</div></form></section>
+  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><BrandMark /><span className="brand-name">split<span className="brand-accent">uai</span></span></div><div className="eyebrow">BEM-VINDE DE VOLTA</div><h1>Que bom te ver<span className="heading-dot">.</span></h1><p className="form-intro">Entre na sua conta para continuar dividindo.</p><form onSubmit={submit}><label>Seu e-mail<input type="email" autoComplete="username" placeholder="voce@email.com" value={email} onChange={(event) => setEmail(event.target.value)} required disabled={!configured || busy} /></label><label>Senha<input type="password" autoComplete="current-password" placeholder="Sua senha" value={password} onChange={(event) => setPassword(event.target.value)} required disabled={!configured || busy} /></label><button className="button button-dark full-button" type="submit" disabled={!configured || busy}>{busy ? 'Entrando…' : 'Entrar'} <span>→</span></button>{!configured && <p className="auth-message" role="status">Autenticação não configurada neste ambiente. Novas contas continuam disponíveis somente por convite.</p>}{error && <p className="auth-error" role="alert">{error}</p>}<div className="login-footnote">O SplitUai é privado. O acesso é feito por convite; não há cadastro público.</div></form></section>
 }
 
 function PasswordSetup({ onSubmit, onSignOut, busy, error }: {
@@ -877,7 +965,7 @@ function PasswordSetup({ onSubmit, onSignOut, busy, error }: {
     void onSubmit(password)
   }
 
-  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><BrandMark /><span>split<span className="brand-accent">uai</span></span></div><div className="eyebrow">CONVITE ACEITO</div><h1>Crie sua senha<span className="heading-dot">.</span></h1><p className="form-intro">Defina uma senha para entrar no SplitUai.</p><form onSubmit={submit}><label>Nova senha<input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={6} required disabled={busy} /></label><label>Confirme a senha<input type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={6} required disabled={busy} /></label><button className="button button-dark full-button" type="submit" disabled={busy}>{busy ? 'Salvando…' : 'Salvar senha'} <span>→</span></button>{(validationError || error) && <p className="auth-error" role="alert">{validationError ?? error}</p>}<button className="text-button auth-signout" type="button" onClick={() => void onSignOut()} disabled={busy}>Sair</button></form></section>
+  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><BrandMark /><span className="brand-name">split<span className="brand-accent">uai</span></span></div><div className="eyebrow">CONVITE ACEITO</div><h1>Crie sua senha<span className="heading-dot">.</span></h1><p className="form-intro">Defina uma senha para entrar no SplitUai.</p><form onSubmit={submit}><label>Nova senha<input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={6} required disabled={busy} /></label><label>Confirme a senha<input type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={6} required disabled={busy} /></label><button className="button button-dark full-button" type="submit" disabled={busy}>{busy ? 'Salvando…' : 'Salvar senha'} <span>→</span></button>{(validationError || error) && <p className="auth-error" role="alert">{validationError ?? error}</p>}<button className="text-button auth-signout" type="button" onClick={() => void onSignOut()} disabled={busy}>Sair</button></form></section>
 }
 
 function MyInvitations({ invitations, onRefresh, onAccept }: { invitations: MyGroupInvitation[]; onRefresh: () => void; onAccept: (id: string) => Promise<void> }) {

@@ -65,7 +65,7 @@ const chartCategoryLabels: Record<ChartCategory, string> = { ...categoryLabels, 
 const settlementPaymentLabels: Record<SettlementPaymentMethod, string> = {
   pix: 'Pix', dinheiro: 'Dinheiro', transferencia: 'Transferência bancária', cartao: 'Cartão', outro: 'Outro', splitwise: 'Importado do Splitwise',
 }
-const brandLogoUrl = `${import.meta.env.BASE_URL}brand/splituai-graffiti.png`
+const brandLogoUrl = `${import.meta.env.BASE_URL}brand/splituai-graffiti.png?v=2`
 
 function toDateInputValue(date: Date) {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 10)

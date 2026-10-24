@@ -15,9 +15,10 @@
 
 .brand-name {
   color: #242923;
-  font: 800 20px/1 Manrope, sans-serif;
-  letter-spacing: -1.1px;
+  font: 400 21px/1.1 'Permanent Marker', 'Comic Sans MS', cursive;
+  letter-spacing: -0.35px;
   white-space: nowrap;
+  transform: rotate(-1deg);
 }
 
 .brand-name > span {

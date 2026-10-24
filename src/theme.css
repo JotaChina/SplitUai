@@ -68,6 +68,63 @@
   color: var(--accent);
 }
 
+:root[data-accent] .tip-card {
+  background: var(--accent-soft);
+}
+
+:root[data-accent] :is(.tip-spark, .tip-art, .arrow-circle, .new-group-icon, .avatar-you, .top-avatar, .profile-photo-preview) {
+  color: var(--accent-strong);
+}
+
+:root[data-accent] :is(.arrow-circle, .avatar-you, .top-avatar, .profile-photo-preview) {
+  background: var(--accent-soft);
+}
+
+:root[data-accent] .new-group-icon {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+:root[data-accent] :is(.summary-label span, .expense-month-group > header > strong, .expense-month-group > summary > strong, .detail-illustration) {
+  color: var(--accent-strong);
+}
+
+:root[data-accent] .summary-decoration {
+  color: color-mix(in srgb, var(--accent) 15%, transparent);
+}
+
+:root[data-accent] .balance-bars i {
+  background: var(--accent-soft);
+}
+
+:root[data-accent] .balance-bars i:nth-child(4),
+:root[data-accent] .balance-bars i:nth-child(5) {
+  background: var(--accent);
+}
+
+:root[data-accent] :is(.role-badge, .invite-status) {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+:root[data-accent] :is(.detail-hero, .group-collapsible > summary, .expense-month-group > header, .expense-month-group > summary) {
+  background: linear-gradient(110deg, var(--accent-soft), #fbfcf9);
+}
+
+:root[data-accent] :is(.recurrence-choice, .settlement-form, .favorite-controls) {
+  border-color: var(--accent-line);
+}
+
+:root[data-accent] .form-note,
+:root[data-accent] .recurrence-choice {
+  background: var(--accent-soft);
+  color: var(--accent-strong);
+}
+
+:root[data-accent] .form-note span {
+  color: var(--accent);
+}
+
 :root[data-mode='dark'] {
   color: #e7eae1;
   background: #151915;
@@ -206,6 +263,296 @@
 :root[data-mode='dark'][data-accent='green'] .nav-item.active { background: #303d29; color: #b3d98b; }
 :root[data-mode='dark'][data-accent='red'] .nav-item.active { background: #462d2b; color: #f0aaa5; }
 :root[data-mode='dark'][data-accent='pink'] .nav-item.active { background: #422f36; color: #f1b5c7; }
+
+/* Consistent theme tokens and controls across every form and filter. */
+:root { color-scheme: light; }
+
+:root[data-mode='dark'] {
+  color-scheme: dark;
+  --ink: #edf0e8;
+  --muted: #aeb8aa;
+  --line: #394239;
+  --surface: #222822;
+  --surface-raised: #1b201b;
+  --surface-sunken: #171c17;
+  --accent-line: color-mix(in srgb, var(--accent) 48%, #394239);
+}
+
+:root[data-mode='dark'][data-accent='green'] {
+  --accent: #b3d98b;
+  --accent-strong: #b3d98b;
+  --accent-soft: #303d29;
+  --accent-pale: #303d29;
+}
+
+:root[data-mode='dark'][data-accent='red'] {
+  --accent: #f0aaa5;
+  --accent-strong: #f0aaa5;
+  --accent-soft: #462d2b;
+  --accent-pale: #462d2b;
+}
+
+:root[data-mode='dark'][data-accent='pink'] {
+  --accent: #f1b5c7;
+  --accent-strong: #f1b5c7;
+  --accent-soft: #422f36;
+  --accent-pale: #422f36;
+}
+
+:root[data-accent] :is(input:not([type='checkbox']):not([type='radio']):not([type='file']):not([type='range']), select, textarea) {
+  min-height: 40px;
+  border: 1px solid #dfe4d8;
+  border-radius: 8px;
+  background-color: #fff;
+  color: #30372d;
+  font-family: 'DM Sans', sans-serif;
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+:root[data-accent] select {
+  appearance: none;
+  padding: 0 36px 0 12px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='m3.5 6 4.5 4 4.5-4' fill='none' stroke='%23636d5f' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.7'/%3E%3C/svg%3E");
+  background-position: right 11px center;
+  background-repeat: no-repeat;
+  background-size: 16px;
+  cursor: pointer;
+}
+
+:root[data-accent] :is(input:not([type='checkbox']):not([type='radio']):not([type='file']):not([type='range']), select, textarea):focus-visible {
+  border-color: var(--accent);
+  outline: 0;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+:root[data-accent] input[type='file'] {
+  min-height: 40px;
+  border: 1px dashed var(--accent-line);
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: inherit;
+  font: 400 11px 'DM Sans', sans-serif;
+}
+
+:root[data-accent] input[type='checkbox'],
+:root[data-accent] input[type='radio'],
+:root[data-accent] input[type='range'] {
+  accent-color: var(--accent);
+}
+
+:root[data-accent] :is(button, a, input, select, textarea):focus-visible {
+  outline-color: var(--accent);
+}
+
+:root[data-accent] .expense-open:hover strong,
+:root[data-accent] .member-name-button:hover,
+:root[data-accent] .profile-link:hover,
+:root[data-accent] .expense-title-button:hover,
+:root[data-accent] .chart-category-select:hover .chart-bar-label span,
+:root[data-accent] .chart-category-select:focus-visible .chart-bar-label span,
+:root[data-accent] .chart-legend-item:hover {
+  color: var(--accent-strong);
+}
+
+:root[data-accent] .chart-trend polyline,
+:root[data-accent] .chart-trend circle {
+  stroke: var(--accent);
+}
+
+:root[data-accent] .chart-trend .trend-area,
+:root[data-accent] .balance-bars i:nth-child(4),
+:root[data-accent] .balance-bars i:nth-child(5) {
+  fill: var(--accent-soft);
+  background: var(--accent);
+}
+
+:root[data-accent] .group-collapsible > summary:focus-visible,
+:root[data-accent] .expense-month-group > summary:focus-visible {
+  outline-color: var(--accent);
+}
+
+:root[data-mode='dark'] :is(.tip-card, .chart-switch, .participant-picker, .recurrence-choice, .settlement-form, .favorite-controls, .demo-banner, .report-controls, .profile-balances p, .avatar-photo) {
+  color: var(--ink);
+  background-color: var(--surface-raised);
+  border-color: var(--line);
+}
+
+:root[data-mode='dark'] :is(.tip-card strong, .chart-bar-label strong, .chart-legend strong, .chart-trend-labels strong, .participant-picker legend, .recurrence-choice strong, .expense-title-button, .member-name-button, .profile-link, .profile-balances strong, .settlement-history > summary strong, .expense-month-group > header h3, .expense-month-group > summary h3, .group-collapsible > summary strong) {
+  color: var(--ink);
+}
+
+:root[data-mode='dark'] :is(.tip-card p, .tip-card .tip-spark, .tip-art, .chart-bar-label span, .chart-legend > div, .chart-trend-labels span, .chart-trend text, .report-controls label, .report-date-range label, .report-date-range span, .report-range-summary, .report-export small, .expense-month-group > header small, .group-collapsible > summary small, .expense-month-group > summary small, .expense-personal-position small, .settlement-form > p, .settlement-panel p, .settlement-panel small, .profile-details-grid small, .profile-group-heading small, .profile-history > p, .balance-period-note, .settlement-history > summary small, .settlement-history .settlement-row small, .settlement-history > small, .invite-help, .profile-photo-editor small, .group-image-position label) {
+  color: var(--muted);
+}
+
+:root[data-mode='dark'] :is(.expense-month-group > header, .group-collapsible > summary, .expense-month-group > summary) {
+  background: linear-gradient(100deg, #252d25, #202620);
+  border-color: var(--line);
+}
+
+:root[data-mode='dark'] :is(.group-collapsible, .expense-month-group, .chart-card, .expense-list, .member-list, .invite-panel, .report-controls, .balance-list, .category-summary, .settlement-panel, .group-image-preview, .appearance-card, .participant-picker, .settlement-form, .favorite-controls) {
+  background-color: var(--surface);
+  border-color: var(--line);
+  color: var(--ink);
+}
+
+:root[data-mode='dark'] :is(.member-row, .invitation-row, .expense-row, .balance-row, .category-summary .balance-row, .group-card-footer, .invitation-list, .profile, .page-footer, .profile-history, .settlement-history, .group-collapsible[open] > summary, .expense-month-group[open] > summary) {
+  border-color: var(--line);
+}
+
+:root[data-mode='dark'] :is(.expense-name small, .group-card-body > p, .group-meta, .section-title p, .page-heading p, .form-intro, .eyebrow, .empty-state p, .empty-expenses p, .expense-row > small, .expense-personal-position small, .balance-row small, .member-row small, .invitation-row small, .settlement-history .settlement-row small, .login-footnote, .topbar-account > span, .side-label, .profile-details small, .profile-photo-editor small, .group-image-position label, .settlement-panel > p, .settlement-panel > small) {
+  color: var(--muted);
+}
+
+:root[data-mode='dark'] :is(.summary-label, .summary-card small, .detail-stats > div small, .detail-people, .detail-hero p, .group-card-footer, .group-meta, .arrow-circle, .back-link, .form-wrap label, .money-input > span, .button-light, .empty-state, .empty-expenses, .expense-settled, .member-row select, .chart-empty) {
+  color: var(--muted);
+}
+
+:root[data-mode='dark'] :is(.chart-donut small, .chart-legend-item, .chart-switch button, .summary-label span, .report-date-range span, .profile-history summary) {
+  color: var(--muted);
+}
+
+:root[data-mode='dark'] .chart-switch button.selected {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+:root[data-mode='dark'] :is(.button-light, .expense-edit, .expense-delete, .arrow-circle, .chart-switch, .chart-switch button.selected) {
+  background-color: #343d34;
+  border-color: var(--line);
+}
+
+:root[data-mode='dark'] .chart-track { background: #303830; }
+:root[data-mode='dark'] .chart-donut::before { background: var(--surface); }
+:root[data-mode='dark'] .chart-trend line { stroke: #465046; }
+:root[data-mode='dark'] .chart-trend .trend-area { fill: var(--accent-soft); }
+:root[data-mode='dark'] .summary-decoration { color: color-mix(in srgb, var(--accent) 13%, transparent); }
+:root[data-mode='dark'] .balance-bars i { background: #343d34; }
+:root[data-mode='dark'] .balance-bars i:nth-child(4),
+:root[data-mode='dark'] .balance-bars i:nth-child(5) { background: var(--accent); }
+
+:root[data-mode='dark'] :is(.form-note, .recurrence-choice, .settlement-form, .favorite-controls, .report-controls, .appearance-card, .participant-picker, .group-image-preview, .profile-balances p) {
+  box-shadow: none;
+}
+
+:root[data-mode='dark'] :is(.settlement-row.settlement-paid, .settlement-pending) {
+  background: #3b2926;
+  color: #efaaa0;
+}
+
+:root[data-mode='dark'] .settlement-row.settlement-paid :is(strong, small),
+:root[data-mode='dark'] .settlement-pending > span strong { color: #efaaa0; }
+
+:root[data-mode='dark'] :is(.settlement-row.settlement-received, .status-sent) {
+  background: #27382a;
+  color: #a9d796;
+}
+
+:root[data-mode='dark'] .settlement-row.settlement-received :is(strong, small) { color: #a9d796; }
+:root[data-mode='dark'] .status-cancelled,
+:root[data-mode='dark'] .status-revoked,
+:root[data-mode='dark'] .status-expired { background: #3b2926; color: #efaaa0; }
+:root[data-mode='dark'] .settlement-status-pending { background: #40351f; color: #eed18e; }
+:root[data-mode='dark'] .settlement-status-paid { background: #27382a; color: #a9d796; }
+:root[data-mode='dark'] .balance-positive { color: #8dd3ae; }
+:root[data-mode='dark'] .balance-negative { color: #ef9d8c; }
+
+:root[data-mode='dark'] :is(.auth-message, .auth-error, .form-note) {
+  background: #29342a;
+  border-color: var(--line);
+  color: #c5d5b7;
+}
+
+:root[data-mode='dark'] .auth-error { background: #3b2926; color: #efaaa0; }
+
+:root[data-mode='dark'][data-accent] :is(input:not([type='checkbox']):not([type='radio']):not([type='file']):not([type='range']), select, textarea) {
+  background-color: var(--surface-sunken);
+  border-color: #465046;
+  color: var(--ink);
+  color-scheme: dark;
+}
+
+:root[data-mode='dark'][data-accent] select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='m3.5 6 4.5 4 4.5-4' fill='none' stroke='%23b3bcb0' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.7'/%3E%3C/svg%3E");
+}
+
+:root[data-mode='dark'] :is(input, select, textarea)::placeholder { color: #8e9a8a; opacity: 1; }
+:root[data-mode='dark'] :is(option, optgroup) { background: var(--surface-sunken); color: var(--ink); }
+:root[data-mode='dark'] input[type='file'] { color: var(--ink); background: var(--surface-raised); border-color: var(--line); }
+:root[data-mode='dark'] input[type='file']::file-selector-button { color: var(--ink); background: #343d34; border: 0; border-radius: 6px; padding: 7px 10px; }
+:root[data-mode='dark'] .form-wrap input[readonly] { color: #aeb8aa; }
+
+:root[data-mode='dark'] .theme-option[aria-pressed='true'] {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+:root[data-mode='dark'][data-accent] .summary-green {
+  background: var(--accent-soft);
+  border-color: var(--accent-soft);
+}
+
+:root[data-mode='dark'] .auth-loading { color: var(--muted); }
+:root[data-mode='dark'] :is(.role-badge, .invite-status, .expense-edit, .expense-delete, .settlement-confirm) {
+  background: #343d34;
+  color: var(--ink);
+  border-color: var(--line);
+}
+
+:root[data-mode='dark'] .expense-delete { color: #efaaa0; }
+:root[data-mode='dark'] .report-range-error { color: #efaaa0; }
+:root[data-mode='dark'] .profile-history summary { color: var(--muted); }
+:root[data-mode='dark'] .avatar { border-color: var(--surface); }
+
+:root[data-mode='dark'][data-accent] :is(.tip-card, .detail-hero, .group-collapsible > summary, .expense-month-group > header, .expense-month-group > summary) {
+  background: linear-gradient(110deg, var(--accent-soft), #222822);
+}
+
+:root[data-accent] .expense-section-content > .section-title > label {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  color: var(--muted, #737b69);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+:root[data-accent] .expense-section-content > .section-title > label select {
+  width: min(320px, 45vw);
+  min-width: 190px;
+}
+
+@media (max-width: 700px) {
+  :root[data-accent] .expense-section-content > .section-title > label {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  :root[data-accent] .expense-section-content > .section-title > label select {
+    width: 100%;
+    min-width: 0;
+  }
+}
+
+:root[data-mode='dark'] :is(.profile-photo-preview, .avatar-you, .top-avatar) {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+:root[data-mode='dark'] .group-card:hover,
+:root[data-mode='dark'] .new-group-card:hover,
+:root[data-mode='dark'] :is(input, select, textarea):focus-visible {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+:root[data-mode='dark'][data-accent] .theme-option[aria-pressed='true'] {
+  color: var(--accent);
+}
 
 .appearance-card {
   display: grid;

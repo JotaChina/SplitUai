@@ -1,17 +1,49 @@
-@import url('https://fonts.googleapis.com/css2?family=Permanent+Marker&display=swap');
-
-.brand svg.brand-mark {
-  width: 29px;
-  height: 29px;
-  flex: none;
-  display: block;
-  border-radius: 0;
-  background: none;
+.brand {
+  justify-content: center;
+  padding: 0 6px 27px;
 }
 
-.brand-name {
-  display: inline-block;
-  font: 400 19px 'Permanent Marker', 'Comic Sans MS', cursive;
-  letter-spacing: -0.45px;
-  transform: rotate(-2deg);
+.brand-logo {
+  width: 146px;
+  height: 146px;
+  display: block;
+  object-fit: contain;
+  flex: none;
+}
+
+.auth-brand {
+  width: 100%;
+  padding: 0 0 30px;
+}
+
+.auth-brand .brand-logo {
+  width: min(100%, 220px);
+  height: auto;
+  margin: 0 auto;
+}
+
+.mobile-brand {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 96px;
+  height: 96px;
+  flex: none;
+  overflow: hidden;
+}
+
+.mobile-brand .brand-logo {
+  width: 126px;
+  height: 126px;
+  max-width: none;
+  object-fit: contain;
+}
+
+@media (max-width: 700px) {
+  .mobile-brand { display: flex; }
+  .topbar { height: 100px; padding: 0 14px; }
+  .breadcrumb { display: none; }
+  .topbar-account { margin-left: auto; }
+  .auth-brand { display: flex; padding: 0 0 26px; }
+  .auth-brand .brand-logo { width: min(100%, 200px); }
 }

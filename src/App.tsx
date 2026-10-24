@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import './brand.css'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from './lib/supabase'
 import {
@@ -55,7 +54,9 @@ import {
 import { parseSplitwiseCsv, type SplitwiseCsvPreview } from './lib/splitwiseCsv'
 
 type Page = 'groups' | 'group' | 'new-group' | 'expense' | 'account' | 'invitations' | 'profile'
+type ColorTheme = 'green' | 'red' | 'pink'
 type ChartCategory = ExpenseCategory | 'contas_da_casa' | 'transporte_grupo'
+type GroupImageFocus = { x: number; y: number }
 const houseBillCategories: ExpenseCategory[] = ['aluguel', 'luz', 'agua', 'iptu', 'internet']
 const transportCategories: ExpenseCategory[] = ['transporte_gasolina', 'transporte_aluguel_veiculo', 'transporte_onibus', 'transporte_aviao', 'transporte_corrida_app', 'transporte_pedagio', 'transporte_multas', 'transporte_ipva', 'transporte_manutencao']
 const categoryLabels: Record<ExpenseCategory, string> = { alimentacao: 'Alimentação', hospedagem: 'Hospedagem', transporte: 'Transporte', corrida: 'Corrida', atividades: 'Atividades', outros: 'Outros', aluguel: 'Aluguel', luz: 'Luz', agua: 'Água', iptu: 'IPTU', internet: 'Internet', viagens: 'Viagens', streaming: 'Streaming', fitness: 'Fitness', fatura_cartao: 'Fatura de cartão', acerto_outros_grupos: 'Acerto de outros grupos', transporte_gasolina: 'Gasolina', transporte_aluguel_veiculo: 'Aluguel de veículo', transporte_onibus: 'Ônibus', transporte_aviao: 'Avião', transporte_corrida_app: 'Corrida de app', transporte_pedagio: 'Pedágio', transporte_multas: 'Multas', transporte_ipva: 'IPVA', transporte_manutencao: 'Manutenção' }
@@ -123,19 +124,58 @@ function downloadGroupCsv(groupName: string, start: string, end: string, expense
   window.setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-function BrandMark() {
-  return <svg className="brand-mark" viewBox="0 0 40 40" role="img" aria-label="Símbolo do SplitUai">
-    <rect width="40" height="40" rx="13" fill="#252a25" />
-    <path d="m20 5.8 12.7 23.5H7.3L20 5.8Z" fill="#d83e36" />
-    <path d="m4.3 13.7 6.1 3.7M4.8 20.9l5.2.3m19.7-5.2 5.7-3.5m-4.9 10.2 5.2.7" fill="none" stroke="#79efa7" strokeWidth="2.1" strokeLinecap="round" />
-    <circle cx="20" cy="22.4" r="2.1" fill="#fff8e8" />
-    <circle cx="11.8" cy="8.1" r=".9" fill="#79efa7" />
-    <circle cx="30.1" cy="32.7" r=".9" fill="#79efa7" />
-  </svg>
+async function cropGroupImage(file: File, aspectRatio: number, focus: GroupImageFocus) {
+  const imageUrl = URL.createObjectURL(file)
+  try {
+    const image = new Image()
+    image.src = imageUrl
+    await image.decode()
+    const sourceRatio = image.naturalWidth / image.naturalHeight
+    const sourceWidth = sourceRatio > aspectRatio ? image.naturalHeight * aspectRatio : image.naturalWidth
+    const sourceHeight = sourceRatio > aspectRatio ? image.naturalHeight : image.naturalWidth / aspectRatio
+    const sourceX = (image.naturalWidth - sourceWidth) * focus.x / 100
+    const sourceY = (image.naturalHeight - sourceHeight) * focus.y / 100
+    const canvas = document.createElement('canvas')
+    canvas.width = Math.round(sourceWidth)
+    canvas.height = Math.round(sourceHeight)
+    const context = canvas.getContext('2d')
+    if (!context) throw new Error('Não foi possível preparar a imagem selecionada.')
+    context.drawImage(image, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, canvas.width, canvas.height)
+    const blob = await new Promise<Blob>((resolve, reject) => canvas.toBlob((result) => result ? resolve(result) : reject(new Error('Não foi possível preparar a imagem selecionada.')), file.type))
+    return new File([blob], file.name, { type: file.type, lastModified: file.lastModified })
+  } finally {
+    URL.revokeObjectURL(imageUrl)
+  }
+}
+
+function GroupImageField({ label, file, onChange, shape, focus, onFocusChange }: {
+  label: string; file: File | null; onChange: (file: File | null) => void
+  shape: 'cover' | 'icon'; focus: GroupImageFocus; onFocusChange: (focus: GroupImageFocus) => void
+}) {
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null)
+  useEffect(() => {
+    if (!file) { setPreviewUrl(null); return }
+    const url = URL.createObjectURL(file)
+    setPreviewUrl(url)
+    return () => URL.revokeObjectURL(url)
+  }, [file])
+  return <div className={`group-image-control group-image-control-${shape}`}>
+    <label>{label}<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => onChange(event.target.files?.[0] ?? null)} /></label>
+    {file && previewUrl && <>
+      <div className={`group-image-preview group-image-preview-${shape}`}><img src={previewUrl} alt={`Prévia de ${label.toLocaleLowerCase('pt-BR')}`} style={{ objectPosition: `${focus.x}% ${focus.y}%` }} /></div>
+      <div className="group-image-position"><label>Horizontal <input aria-label={`Enquadramento horizontal de ${label.toLocaleLowerCase('pt-BR')}`} type="range" min="0" max="100" value={focus.x} onChange={(event) => onFocusChange({ ...focus, x: Number(event.target.value) })} /></label><label>Vertical <input aria-label={`Enquadramento vertical de ${label.toLocaleLowerCase('pt-BR')}`} type="range" min="0" max="100" value={focus.y} onChange={(event) => onFocusChange({ ...focus, y: Number(event.target.value) })} /></label></div>
+      <button type="button" className="text-button" onClick={() => onChange(null)}>Remover imagem selecionada</button>
+    </>}
+  </div>
 }
 
 function App() {
   const [page, setPage] = useState<Page>('groups')
+  const [colorTheme, setColorTheme] = useState<ColorTheme>(() => {
+    const saved = window.localStorage.getItem('splituai-color-theme')
+    return saved === 'red' || saved === 'pink' ? saved : 'green'
+  })
+  const [darkMode, setDarkMode] = useState(() => window.localStorage.getItem('splituai-dark-mode') === 'true')
   const [session, setSession] = useState<Session | null>(null)
   const [checkingSession, setCheckingSession] = useState(Boolean(supabase))
   const [authError, setAuthError] = useState<string | null>(null)
@@ -148,7 +188,15 @@ function App() {
   const [profileUserId, setProfileUserId] = useState<string | null>(null)
   const [editingExpense, setEditingExpense] = useState<ExpenseRecord | null>(null)
   const [myInvitations, setMyInvitations] = useState<MyGroupInvitation[]>([])
+  const [accountProfile, setAccountProfile] = useState<GroupProfileRecord | null>(null)
   const hadSession = useRef(false)
+
+  useEffect(() => {
+    document.documentElement.dataset.accent = colorTheme
+    document.documentElement.dataset.mode = darkMode ? 'dark' : 'light'
+    window.localStorage.setItem('splituai-color-theme', colorTheme)
+    window.localStorage.setItem('splituai-dark-mode', String(darkMode))
+  }, [colorTheme, darkMode])
 
   async function refreshGroups() {
     if (!supabase) return
@@ -195,8 +243,10 @@ function App() {
     if (!session) {
       setGroups([])
       setSelectedGroupId(null)
+      setAccountProfile(null)
       return
     }
+    if (supabase) void getProfile(supabase, session.user.id).then(setAccountProfile).catch(() => setAccountProfile(null))
     void refreshGroups()
     if (supabase) void listMyGroupInvitations(supabase).then((invitations) => {
       setMyInvitations(invitations)
@@ -268,12 +318,15 @@ function App() {
     return <Login configured={Boolean(supabase)} onSignIn={signIn} busy={authBusy} error={authError} />
   }
 
+  const accountEmail = session.user.email || 'Conta autenticada'
+  const accountName = accountProfile?.display_name || (accountProfile?.username ? `@${accountProfile.username}` : session.user.email?.split('@')[0] || 'Minha conta')
+  const accountInitial = (accountProfile?.display_name || accountProfile?.username || accountEmail).replace(/^@/, '').slice(0, 1).toLocaleUpperCase('pt-BR') || 'U'
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <a className="brand" href="#inicio" onClick={(event) => { event.preventDefault(); setPage('groups') }}>
-          <BrandMark />
-          <span className="brand-name">split<span className="brand-accent">uai</span></span>
+        <a className="brand" href="#inicio" onClick={(event) => { event.preventDefault(); setPage('groups') }} aria-label="SplitUai — início">
+          <img className="brand-logo" src="/brand/splituai-graffiti.png" alt="SplitUai" />
         </a>
         <div className="side-label">MENU</div>
         <nav className="main-nav" aria-label="Navegação principal">
@@ -289,19 +342,19 @@ function App() {
         </nav>
         <div className="sidebar-bottom">
           <div className="help-card"><span className="help-icon">✳</span><strong>Dividir fica leve.</strong><p>Organize os gastos e aproveite o que importa.</p></div>
-          <div className="profile"><div className="avatar avatar-you">U</div><div className="profile-details"><strong>Minha conta</strong><small>Perfil SplitUai</small></div></div>
+          <button className="profile" type="button" onClick={() => setPage('account')} aria-label="Abrir minha conta"><div className="avatar avatar-you">{accountProfile?.avatar_url ? <img src={accountProfile.avatar_url} alt="" /> : accountInitial}</div><div className="profile-details"><strong>{accountName}</strong><small>{accountEmail}</small></div></button>
         </div>
       </aside>
 
       <main className="main-content">
-        <header className="topbar"><div className="breadcrumb">Espaço pessoal <span>/</span> <strong>{page === 'account' ? 'Minha conta' : page === 'expense' ? 'Nova despesa' : page === 'profile' ? 'Perfil' : page === 'group' ? groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo' : page === 'new-group' ? 'Novo grupo' : 'Meus grupos'}</strong></div><div className="topbar-account"><button className="sign-out-button" onClick={() => void signOut()} disabled={authBusy}>Sair</button></div></header>
+        <header className="topbar"><a className="mobile-brand" href="#inicio" onClick={(event) => { event.preventDefault(); setPage('groups') }} aria-label="SplitUai — início"><img className="brand-logo" src="/brand/splituai-graffiti.png" alt="SplitUai" /></a><div className="breadcrumb">Espaço pessoal <span>/</span> <strong>{page === 'account' ? 'Minha conta' : page === 'expense' ? 'Nova despesa' : page === 'profile' ? 'Perfil' : page === 'group' ? groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo' : page === 'new-group' ? 'Novo grupo' : 'Meus grupos'}</strong></div><div className="topbar-account"><button className="sign-out-button" onClick={() => void signOut()} disabled={authBusy}>Sair</button></div></header>
 
         {page === 'groups' && <Groups groups={groups} loading={groupsLoading} error={groupsError} onRefresh={() => void refreshGroups()} onOpen={(id) => { setSelectedGroupId(id); setPage('group') }} onCreate={() => setPage('new-group')} />}
         {page === 'new-group' && <NewGroup onBack={() => setPage('groups')} onCreate={saveNewGroup} />}
         {page === 'group' && selectedGroupId && supabase && <Group key={selectedGroupId} client={supabase} groupId={selectedGroupId} userId={session.user.id} onBack={() => { void refreshGroups(); setPage('groups') }} onAddExpense={() => { setEditingExpense(null); setPage('expense') }} onEditExpense={(expense) => { setEditingExpense(expense); setPage('expense') }} onOpenProfile={(id) => { setProfileUserId(id); setPage('profile') }} />}
         {page === 'group' && !selectedGroupId && <Groups groups={groups} loading={groupsLoading} error={groupsError} onRefresh={() => void refreshGroups()} onOpen={(id) => { setSelectedGroupId(id); setPage('group') }} onCreate={() => setPage('new-group')} />}
         {page === 'expense' && selectedGroupId && supabase && <Expense client={supabase} groupId={selectedGroupId} groupName={groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo'} userId={session.user.id} expense={editingExpense} onBack={() => { setEditingExpense(null); setPage('group') }} onSaved={() => { setEditingExpense(null); setPage('group') }} />}
-        {page === 'account' && supabase && <Account client={supabase} email={session.user.email ?? ''} userId={session.user.id} onSignOut={signOut} busy={authBusy} />}
+        {page === 'account' && supabase && <Account client={supabase} email={session.user.email ?? ''} userId={session.user.id} onProfileChange={setAccountProfile} onSignOut={signOut} busy={authBusy} colorTheme={colorTheme} onColorThemeChange={setColorTheme} darkMode={darkMode} onDarkModeChange={setDarkMode} />}
         {page === 'profile' && supabase && profileUserId && <UserProfile client={supabase} userId={profileUserId} viewerId={session.user.id} onBack={() => setPage(selectedGroupId ? 'group' : 'groups')} onOpenGroup={(id) => { setSelectedGroupId(id); setPage('group') }} />}
         {page === 'invitations' && <MyInvitations invitations={myInvitations} onRefresh={() => void refreshMyInvitations()} onAccept={acceptMyInvitation} />}
       </main>
@@ -367,6 +420,8 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense, o
   const [description, setDescription] = useState('')
   const [iconFile, setIconFile] = useState<File | null>(null)
   const [coverFile, setCoverFile] = useState<File | null>(null)
+  const [iconFocus, setIconFocus] = useState<GroupImageFocus>({ x: 50, y: 50 })
+  const [coverFocus, setCoverFocus] = useState<GroupImageFocus>({ x: 50, y: 50 })
   const [email, setEmail] = useState('')
   const [busy, setBusy] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
@@ -467,8 +522,8 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense, o
     setBusy(true)
     setError(null)
     try {
-      const iconUrl = iconFile ? await uploadImage(client, `groups/${groupId}/icon`, iconFile) : group?.icon_url
-      const coverUrl = coverFile ? await uploadImage(client, `groups/${groupId}/cover`, coverFile) : group?.cover_url
+      const iconUrl = iconFile ? await uploadImage(client, `groups/${groupId}/icon`, await cropGroupImage(iconFile, 1, iconFocus)) : group?.icon_url
+      const coverUrl = coverFile ? await uploadImage(client, `groups/${groupId}/cover`, await cropGroupImage(coverFile, 3.2, coverFocus)) : group?.cover_url
       const updated = await updateGroup(client, groupId, { name, description, icon_url: iconUrl, cover_url: coverUrl })
       setGroup(updated)
       setEditing(false)
@@ -661,7 +716,7 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense, o
       {isAdmin && <><button className="expense-edit" aria-label={`Editar ${expense.description}`} onClick={() => onEditExpense(expense)}>Editar</button><button className="expense-delete" aria-label={`Excluir ${expense.description}`} onClick={() => void removeExpense(expense)}>×</button></>}
     </div>
   }
-  return <section className="page-wrap" aria-busy={busy}><button className="back-link" onClick={onBack}>← Voltar aos grupos</button><div className="detail-hero" style={group.cover_url ? { backgroundImage: `linear-gradient(90deg,rgba(18,28,17,.78),rgba(18,28,17,.2)),url("${group.cover_url}")`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}><div><div className="eyebrow">{group.archived_at ? 'GRUPO ARQUIVADO' : 'GRUPO'} · CRIADO EM {new Date(group.created_at).toLocaleDateString('pt-BR')}</div>{editing ? <form className="group-edit-form" onSubmit={(event) => void saveDetails(event)}><label>Nome<input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} required /></label><label>Descrição<textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1000} rows={2} /></label><div className="group-image-fields"><label>Foto do ícone<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setIconFile(event.target.files?.[0] ?? null)} /></label><label>Foto de capa<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setCoverFile(event.target.files?.[0] ?? null)} /></label></div><small>JPG, PNG ou WebP · até 5 MB por imagem.</small><div className="form-actions"><button type="button" className="button button-light" onClick={() => { setName(group.name); setDescription(group.description ?? ''); setIconFile(null); setCoverFile(null); setEditing(false) }}>Cancelar</button><button className="button button-dark" disabled={busy}>{busy ? 'Salvando…' : 'Salvar'}</button></div></form> : <><div className="group-hero-title">{group.icon_url && <img className="group-icon-large" src={group.icon_url} alt="" />}<h1>{group.name}<span className="heading-dot">.</span></h1></div><p>{group.description || 'Organize as despesas com seus participantes.'}</p>{isAdmin && <button className="text-button" onClick={() => setEditing(true)}>Editar informações</button>}</>}<div className="detail-people"><span>{members.length} {members.length === 1 ? 'participante' : 'participantes'} · Seu papel: {isAdmin ? 'admin' : 'membro'}</span></div><div className="heading-actions">{isAdmin && <button className="button button-light" aria-pressed={adminView} onClick={() => setAdminView((value) => !value)}>{adminView ? 'Visão comum' : 'Visão de admin'}</button>}<button className="button button-light" onClick={() => void archiveGroup()} disabled={busy}>{group.archived_at ? 'Restaurar grupo' : 'Arquivar grupo'}</button>{canDeleteGroup && <button className="button button-light" onClick={() => void permanentlyDeleteGroup()} disabled={busy}>Excluir grupo</button>}</div>{groupExpenses.length > 0 && <small>Grupos com despesas podem ser arquivados; o histórico não pode ser apagado.</small>}</div>{!group.cover_url && <div className="detail-illustration">✳</div>}</div>{error && <p className="auth-error" role="alert">{error}</p>}
+  return <section className="page-wrap" aria-busy={busy}><button className="back-link" onClick={onBack}>← Voltar aos grupos</button><div className="detail-hero" style={group.cover_url ? { backgroundImage: `linear-gradient(90deg,rgba(18,28,17,.78),rgba(18,28,17,.2)),url("${group.cover_url}")`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}><div><div className="eyebrow">{group.archived_at ? 'GRUPO ARQUIVADO' : 'GRUPO'} · CRIADO EM {new Date(group.created_at).toLocaleDateString('pt-BR')}</div>{editing ? <form className="group-edit-form" onSubmit={(event) => void saveDetails(event)}><label>Nome<input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} required /></label><label>Descrição<textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1000} rows={2} /></label><div className="group-image-fields"><GroupImageField label="Foto do ícone" file={iconFile} onChange={setIconFile} shape="icon" focus={iconFocus} onFocusChange={setIconFocus} /><GroupImageField label="Foto de capa" file={coverFile} onChange={setCoverFile} shape="cover" focus={coverFocus} onFocusChange={setCoverFocus} /></div><small>Ajuste o enquadramento na prévia antes de salvar. JPG, PNG ou WebP · até 5 MB por imagem.</small><div className="form-actions"><button type="button" className="button button-light" onClick={() => { setName(group.name); setDescription(group.description ?? ''); setIconFile(null); setCoverFile(null); setEditing(false) }}>Cancelar</button><button className="button button-dark" disabled={busy}>{busy ? 'Salvando…' : 'Salvar'}</button></div></form> : <><div className="group-hero-title">{group.icon_url && <img className="group-icon-large" src={group.icon_url} alt="" />}<h1>{group.name}<span className="heading-dot">.</span></h1></div><p>{group.description || 'Organize as despesas com seus participantes.'}</p>{isAdmin && <button className="text-button" onClick={() => setEditing(true)}>Editar informações</button>}</>}<div className="detail-people"><span>{members.length} {members.length === 1 ? 'participante' : 'participantes'} · Seu papel: {isAdmin ? 'admin' : 'membro'}</span></div><div className="heading-actions">{isAdmin && <button className="button button-light" aria-pressed={adminView} onClick={() => setAdminView((value) => !value)}>{adminView ? 'Visão comum' : 'Visão de admin'}</button>}<button className="button button-light" onClick={() => void archiveGroup()} disabled={busy}>{group.archived_at ? 'Restaurar grupo' : 'Arquivar grupo'}</button>{canDeleteGroup && <button className="button button-light" onClick={() => void permanentlyDeleteGroup()} disabled={busy}>Excluir grupo</button>}</div>{groupExpenses.length > 0 && <small>Grupos com despesas podem ser arquivados; o histórico não pode ser apagado.</small>}</div>{!group.cover_url && <div className="detail-illustration">✳</div>}</div>{error && <p className="auth-error" role="alert">{error}</p>}
     <details className="group-collapsible" open><summary><span><strong>Participantes</strong><small>{members.length} pessoas · perfis, papéis e acesso</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="member-list">{members.map((member) => <div className="member-row" key={member.user_id}>{member.avatar_url ? <img className="avatar avatar-photo" src={member.avatar_url} alt="" /> : <span className="avatar avatar-you">{(member.username?.[0] ?? member.display_name?.[0] ?? 'P').toUpperCase()}</span>}<button className="member-name-button" onClick={() => onOpenProfile(member.user_id)} title="Abrir perfil">{member.username ? `@${member.username}` : member.display_name || 'Sem identificador'}{!member.active && <small> · Acesso encerrado</small>}</button><span className="role-badge">{member.role === 'admin' ? 'Administrador' : 'Membro'}</span>{isAdmin && member.active && member.user_id !== userId && <><select aria-label={`Papel de ${member.username ?? member.display_name ?? 'participante'}`} value={member.role} disabled={busy} onChange={(event) => void memberRole(member, event.target.value as 'admin' | 'member')}><option value="member">Membro</option><option value="admin">Administrador</option></select><button className="text-button" disabled={busy} onClick={() => void memberRemove(member)}>Remover</button></>}</div>)}</div></details>
     {isAdmin && <details className="group-collapsible"><summary><span><strong>Convites</strong><small>{invitations.length} convites · enviar e acompanhar acessos</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="invite-panel"><form className="invite-form" onSubmit={(event) => void invite(event)}><label>E-mail da pessoa<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required placeholder="pessoa@email.com" disabled={busy} /></label><button className="button button-dark" disabled={busy}>{busy ? 'Enviando…' : 'Criar e enviar'}</button></form><p className="invite-help">A pessoa receberá um link seguro para entrar. Contas existentes recebem link de acesso; contas novas recebem convite para criar a senha. O aceite do grupo acontece depois que a pessoa entra e confirma o convite.</p>{error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}{invitations.length > 0 && <div className="invitation-list">{invitations.map((invitation) => { const expired = ['pending','sent'].includes(invitation.status) && new Date(invitation.expires_at) <= new Date(); const status = expired ? 'expired' : invitation.status; return <div className="invitation-row" key={invitation.id}><div><strong>{invitation.invited_email}</strong><small>Expira em {new Date(invitation.expires_at).toLocaleDateString('pt-BR')}</small></div><span className={`invite-status status-${status}`}>{status === 'pending' ? 'Pendente' : status === 'sent' ? 'Enviado' : status === 'accepted' ? 'Aceito' : status === 'cancelled' ? 'Cancelado' : 'Expirado'}</span>{isAdmin && ['pending','sent'].includes(invitation.status) && !expired && <><button className="text-button" disabled={busy} onClick={() => void invitationAction(invitation,'send')}>{invitation.status === 'sent' ? 'Reenviar' : 'Enviar'}</button><button className="text-button" disabled={busy} onClick={() => void invitationAction(invitation,'cancel')}>Cancelar</button></>}</div> })}</div>}</div></details>}
     {isAdmin && adminView && <details className="group-collapsible admin-tools"><summary><span><strong>Ferramentas administrativas</strong><small>Importar histórico do Splitwise</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><section className="settlement-panel splitwise-import"><div><div className="eyebrow">VISÃO DE ADMIN</div><h3>Importar histórico do Splitwise</h3><p>Despesas entram como despesas e pagamentos entram como acertos, separados dos gráficos. Reimportar o mesmo arquivo não duplica os registros.</p></div><label>Arquivo CSV<input type="file" accept=".csv,text/csv" disabled={busy} onChange={(event) => void chooseSplitwiseFile(event.target.files?.[0])} /></label>{splitwisePreview && <><strong>{splitwiseFileName}: {splitwisePreview.expenses.length} despesas · {splitwisePreview.settlements.length} acertos · {splitwisePreview.skipped.length} linhas ignoradas</strong><div className="splitwise-mappings">{splitwisePreview.memberNames.map((person) => <label key={person}>{person}<select value={splitwiseMappings[person] ?? ''} onChange={(event) => setSplitwiseMappings((current) => ({ ...current, [person]: event.target.value }))}><option value="">Selecione participante</option>{members.map((member) => <option key={member.user_id} value={member.user_id}>{member.username ? `@${member.username}` : member.display_name || 'Sem identificador'}{!member.active ? ' (acesso encerrado)' : ''}</option>)}</select></label>)}</div>{splitwisePreview.skipped.length > 0 && <details><summary>Ver linhas ignoradas</summary><ul>{splitwisePreview.skipped.map((row) => <li key={row.row}>Linha {row.row} · {row.description}: {row.reason}</li>)}</ul></details>}<div className="form-actions"><button className="button button-light" disabled={busy} onClick={() => setSplitwisePreview(null)}>Cancelar</button><button className="button button-dark" disabled={busy || splitwisePreview.expenses.length + splitwisePreview.settlements.length === 0} onClick={() => void importSplitwise()}>{busy ? 'Importando…' : 'Importar histórico'}</button></div></>}</section></details>}
@@ -942,7 +997,7 @@ function Login({ configured, onSignIn, busy, error }: {
     void onSignIn(email.trim(), password)
   }
 
-  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><BrandMark /><span className="brand-name">split<span className="brand-accent">uai</span></span></div><div className="eyebrow">BEM-VINDE DE VOLTA</div><h1>Que bom te ver<span className="heading-dot">.</span></h1><p className="form-intro">Entre na sua conta para continuar dividindo.</p><form onSubmit={submit}><label>Seu e-mail<input type="email" autoComplete="username" placeholder="voce@email.com" value={email} onChange={(event) => setEmail(event.target.value)} required disabled={!configured || busy} /></label><label>Senha<input type="password" autoComplete="current-password" placeholder="Sua senha" value={password} onChange={(event) => setPassword(event.target.value)} required disabled={!configured || busy} /></label><button className="button button-dark full-button" type="submit" disabled={!configured || busy}>{busy ? 'Entrando…' : 'Entrar'} <span>→</span></button>{!configured && <p className="auth-message" role="status">Autenticação não configurada neste ambiente. Novas contas continuam disponíveis somente por convite.</p>}{error && <p className="auth-error" role="alert">{error}</p>}<div className="login-footnote">O SplitUai é privado. O acesso é feito por convite; não há cadastro público.</div></form></section>
+  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><img className="brand-logo" src="/brand/splituai-graffiti.png" alt="SplitUai" /></div><div className="eyebrow">BEM-VINDE DE VOLTA</div><h1>Que bom te ver<span className="heading-dot">.</span></h1><p className="form-intro">Entre na sua conta para continuar dividindo.</p><form onSubmit={submit}><label>Seu e-mail<input type="email" autoComplete="username" placeholder="voce@email.com" value={email} onChange={(event) => setEmail(event.target.value)} required disabled={!configured || busy} /></label><label>Senha<input type="password" autoComplete="current-password" placeholder="Sua senha" value={password} onChange={(event) => setPassword(event.target.value)} required disabled={!configured || busy} /></label><button className="button button-dark full-button" type="submit" disabled={!configured || busy}>{busy ? 'Entrando…' : 'Entrar'} <span>→</span></button>{!configured && <p className="auth-message" role="status">Autenticação não configurada neste ambiente. Novas contas continuam disponíveis somente por convite.</p>}{error && <p className="auth-error" role="alert">{error}</p>}<div className="login-footnote">O SplitUai é privado. O acesso é feito por convite; não há cadastro público.</div></form></section>
 }
 
 function PasswordSetup({ onSubmit, onSignOut, busy, error }: {
@@ -965,7 +1020,7 @@ function PasswordSetup({ onSubmit, onSignOut, busy, error }: {
     void onSubmit(password)
   }
 
-  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><BrandMark /><span className="brand-name">split<span className="brand-accent">uai</span></span></div><div className="eyebrow">CONVITE ACEITO</div><h1>Crie sua senha<span className="heading-dot">.</span></h1><p className="form-intro">Defina uma senha para entrar no SplitUai.</p><form onSubmit={submit}><label>Nova senha<input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={6} required disabled={busy} /></label><label>Confirme a senha<input type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={6} required disabled={busy} /></label><button className="button button-dark full-button" type="submit" disabled={busy}>{busy ? 'Salvando…' : 'Salvar senha'} <span>→</span></button>{(validationError || error) && <p className="auth-error" role="alert">{validationError ?? error}</p>}<button className="text-button auth-signout" type="button" onClick={() => void onSignOut()} disabled={busy}>Sair</button></form></section>
+  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><img className="brand-logo" src="/brand/splituai-graffiti.png" alt="SplitUai" /></div><div className="eyebrow">CONVITE ACEITO</div><h1>Crie sua senha<span className="heading-dot">.</span></h1><p className="form-intro">Defina uma senha para entrar no SplitUai.</p><form onSubmit={submit}><label>Nova senha<input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={6} required disabled={busy} /></label><label>Confirme a senha<input type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={6} required disabled={busy} /></label><button className="button button-dark full-button" type="submit" disabled={busy}>{busy ? 'Salvando…' : 'Salvar senha'} <span>→</span></button>{(validationError || error) && <p className="auth-error" role="alert">{validationError ?? error}</p>}<button className="text-button auth-signout" type="button" onClick={() => void onSignOut()} disabled={busy}>Sair</button></form></section>
 }
 
 function MyInvitations({ invitations, onRefresh, onAccept }: { invitations: MyGroupInvitation[]; onRefresh: () => void; onAccept: (id: string) => Promise<void> }) {
@@ -1059,7 +1114,38 @@ function UserProfile({ client, userId, viewerId, onBack, onOpenGroup }: {
   </section>
 }
 
-function Account({ client, email, userId, onSignOut, busy }: { client: NonNullable<typeof supabase>; email: string; userId: string; onSignOut: () => Promise<void>; busy: boolean }) {
+function AppearanceSettings({ colorTheme, onColorThemeChange, darkMode, onDarkModeChange }: {
+  colorTheme: ColorTheme
+  onColorThemeChange: (theme: ColorTheme) => void
+  darkMode: boolean
+  onDarkModeChange: (enabled: boolean) => void
+}) {
+  const options: Array<{ id: ColorTheme; label: string }> = [
+    { id: 'green', label: 'Verde' },
+    { id: 'red', label: 'Vermelho' },
+    { id: 'pink', label: 'Rosa bebê' },
+  ]
+  return <section className="appearance-card" aria-labelledby="appearance-title">
+    <div><h2 id="appearance-title">Aparência</h2><p>Escolha a cor principal e o modo de exibição.</p></div>
+    <div className="theme-options" role="group" aria-label="Cor do aplicativo">
+      {options.map((option) => <button key={option.id} type="button" className={`theme-option theme-option-${option.id}`} aria-pressed={colorTheme === option.id} onClick={() => onColorThemeChange(option.id)}><span className="theme-swatch" aria-hidden="true" />{option.label}</button>)}
+    </div>
+    <label className="dark-mode-option"><input type="checkbox" checked={darkMode} onChange={(event) => onDarkModeChange(event.target.checked)} /><span><strong>Modo noturno</strong><small>Aplicar fundo escuro ao app</small></span></label>
+  </section>
+}
+
+function Account({ client, email, userId, onProfileChange, onSignOut, busy, colorTheme, onColorThemeChange, darkMode, onDarkModeChange }: {
+  client: NonNullable<typeof supabase>
+  email: string
+  userId: string
+  onProfileChange: (profile: GroupProfileRecord | null) => void
+  onSignOut: () => Promise<void>
+  busy: boolean
+  colorTheme: ColorTheme
+  onColorThemeChange: (theme: ColorTheme) => void
+  darkMode: boolean
+  onDarkModeChange: (enabled: boolean) => void
+}) {
   const [username, setUsername] = useState('')
   const [pixKey, setPixKey] = useState('')
   const [avatarUrl, setAvatarUrl] = useState<string | null>(null)
@@ -1102,12 +1188,13 @@ function Account({ client, email, userId, onSignOut, busy }: { client: NonNullab
         setAvatarFile(null)
       }
       setUsername(saved)
+      onProfileChange({ id: userId, display_name: null, username: saved, avatar_url: nextAvatarUrl ?? null, pix_key: pixKey.trim() || null })
       setNotice(`Perfil salvo como @${saved}.`)
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Não foi possível salvar o identificador. Talvez ele já esteja em uso.')
     } finally { setSaving(false) }
   }
-  return <section className="page-wrap form-wrap"><div className="eyebrow">SUA CONTA</div><h1>Minha conta<span className="heading-dot">.</span></h1><p className="form-intro">Seu e-mail fica visível apenas nesta área de conta e nos fluxos de convite.</p>{profileLoading ? <p className="auth-loading">Carregando perfil…</p> : <form onSubmit={(event) => void saveProfile(event)}><div className="profile-photo-editor"><div className="profile-photo-preview">{avatarFile ? <img src={URL.createObjectURL(avatarFile)} alt="Prévia da foto de perfil" /> : avatarUrl ? <img src={avatarUrl} alt="Foto de perfil atual" /> : username.slice(0,1).toUpperCase() || 'U'}</div><label>Foto de perfil<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setAvatarFile(event.target.files?.[0] ?? null)} disabled={saving} /><small>JPG, PNG ou WebP · até 5 MB.</small></label></div><label>Identificador público<input value={username} onChange={(event) => setUsername(event.target.value)} minLength={3} maxLength={24} pattern="[A-Za-z0-9_]{3,24}" placeholder="ex.: ana_silva" required disabled={saving} /></label><small>Use de 3 a 24 letras sem acento, números ou sublinhados. Será exibido como @{username || 'usuario'}.</small><label>Chave PIX (opcional)<input value={pixKey} onChange={(event) => setPixKey(event.target.value)} maxLength={128} placeholder="CPF, telefone, e-mail ou chave aleatória" disabled={saving} /><small>Visível somente para você e para pessoas com quem compartilha um grupo.</small></label><label>E-mail da conta<input value={email} readOnly /></label>{error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}<div className="form-actions"><button className="button button-dark" type="submit" disabled={saving}>{saving ? 'Salvando…' : 'Salvar perfil'}</button><button className="button button-light" type="button" onClick={() => void onSignOut()} disabled={busy}>{busy ? 'Saindo…' : 'Sair da conta'}</button></div></form>}</section>
+  return <section className="page-wrap form-wrap"><AppearanceSettings colorTheme={colorTheme} onColorThemeChange={onColorThemeChange} darkMode={darkMode} onDarkModeChange={onDarkModeChange} /><div className="eyebrow">SUA CONTA</div><h1>Minha conta<span className="heading-dot">.</span></h1><p className="form-intro">Seu e-mail fica visível apenas nesta área de conta e nos fluxos de convite.</p>{profileLoading ? <p className="auth-loading">Carregando perfil…</p> : <form onSubmit={(event) => void saveProfile(event)}><div className="profile-photo-editor"><div className="profile-photo-preview">{avatarFile ? <img src={URL.createObjectURL(avatarFile)} alt="Prévia da foto de perfil" /> : avatarUrl ? <img src={avatarUrl} alt="Foto de perfil atual" /> : username.slice(0,1).toUpperCase() || 'U'}</div><label>Foto de perfil<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setAvatarFile(event.target.files?.[0] ?? null)} disabled={saving} /><small>JPG, PNG ou WebP · até 5 MB.</small></label></div><label>Identificador público<input value={username} onChange={(event) => setUsername(event.target.value)} minLength={3} maxLength={24} pattern="[A-Za-z0-9_]{3,24}" placeholder="ex.: ana_silva" required disabled={saving} /></label><small>Use de 3 a 24 letras sem acento, números ou sublinhados. Será exibido como @{username || 'usuario'}.</small><label>Chave PIX (opcional)<input value={pixKey} onChange={(event) => setPixKey(event.target.value)} maxLength={128} placeholder="CPF, telefone, e-mail ou chave aleatória" disabled={saving} /><small>Visível somente para você e para pessoas com quem compartilha um grupo.</small></label><label>E-mail da conta<input value={email} readOnly /></label>{error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}<div className="form-actions"><button className="button button-dark" type="submit" disabled={saving}>{saving ? 'Salvando…' : 'Salvar perfil'}</button><button className="button button-light" type="button" onClick={() => void onSignOut()} disabled={busy}>{busy ? 'Saindo…' : 'Sair da conta'}</button></div></form>}</section>
 }
 
 export default App

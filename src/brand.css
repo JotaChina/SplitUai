@@ -1,49 +1,83 @@
 .brand {
-  justify-content: center;
-  padding: 0 6px 27px;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 0 6px 34px;
 }
 
 .brand-logo {
-  width: 146px;
-  height: 146px;
+  width: 42px;
+  height: 42px;
   display: block;
-  object-fit: contain;
+  object-fit: cover;
+  border-radius: 10px;
   flex: none;
 }
 
+.brand-name {
+  color: #242923;
+  font: 800 20px/1 Manrope, sans-serif;
+  letter-spacing: -1.1px;
+  white-space: nowrap;
+}
+
+.brand-name > span {
+  color: var(--accent, #638c2b);
+}
+
+.help-icon {
+  display: block;
+  width: 20px;
+  height: 20px;
+  margin-bottom: 12px;
+}
+
 .auth-brand {
+  display: flex;
+  align-items: center;
   width: 100%;
+  gap: 12px;
   padding: 0 0 30px;
 }
 
 .auth-brand .brand-logo {
-  width: min(100%, 220px);
-  height: auto;
-  margin: 0 auto;
+  width: 58px;
+  height: 58px;
+}
+
+.auth-brand .brand-name {
+  font-size: 25px;
 }
 
 .mobile-brand {
   display: none;
   align-items: center;
-  justify-content: center;
-  width: 96px;
-  height: 96px;
+  justify-content: flex-start;
+  gap: 8px;
+  width: auto;
+  height: auto;
   flex: none;
-  overflow: hidden;
+  overflow: visible;
+  text-decoration: none;
 }
 
 .mobile-brand .brand-logo {
-  width: 126px;
-  height: 126px;
-  max-width: none;
-  object-fit: contain;
+  width: 40px;
+  height: 40px;
+}
+
+.mobile-brand .brand-name {
+  font-size: 19px;
 }
 
 @media (max-width: 700px) {
   .mobile-brand { display: flex; }
-  .topbar { height: 100px; padding: 0 14px; }
+  .topbar { height: 64px; padding: 0 14px; }
   .breadcrumb { display: none; }
   .topbar-account { margin-left: auto; }
   .auth-brand { display: flex; padding: 0 0 26px; }
-  .auth-brand .brand-logo { width: min(100%, 200px); }
+  .auth-brand .brand-logo { width: 54px; height: 54px; }
+}
+
+:root[data-mode='dark'] .brand-name {
+  color: #f0f2eb;
 }

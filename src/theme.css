@@ -59,6 +59,15 @@
   color: var(--accent-strong);
 }
 
+:root[data-accent] .help-card {
+  background: var(--accent-soft);
+}
+
+:root[data-accent] .help-icon,
+:root[data-accent] .page-footer b {
+  color: var(--accent);
+}
+
 :root[data-mode='dark'] {
   color: #e7eae1;
   background: #151915;
@@ -171,6 +180,16 @@
 :root[data-mode='dark'] .expense-row,
 :root[data-mode='dark'] .balance-row {
   border-color: #394239;
+}
+
+:root[data-mode='dark'] .help-card {
+  color: #e7eae1;
+  background: color-mix(in srgb, var(--accent) 16%, #222822);
+  border: 1px solid color-mix(in srgb, var(--accent) 25%, #394239);
+}
+
+:root[data-mode='dark'] .help-card p {
+  color: #b4bcb0;
 }
 
 :root[data-mode='dark'] .button-light,

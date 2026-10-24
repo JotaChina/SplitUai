@@ -2,15 +2,15 @@
 
 Aplicação web para organizar despesas compartilhadas em grupos pequenos.
 
-### Release de 2026-10-24 · banco atualizado, frontend aguardando publicação
+### Release de 2026-10-24 · publicado
 
-O código em revisão acrescenta Internet em **Contas da Casa**, as categorias Viagens, Streaming, Fitness, Fatura de cartão e Acerto de outros grupos, e as subcategorias de Transporte. Os filtros e relatórios agrupam Contas da Casa e Transporte sem reclassificar despesas antigas. A lista mostra o saldo individual da pessoa autenticada por despesa e mantém o valor total como contexto. Os painéis do grupo e os meses da lista podem ser recolhidos por teclado ou mouse.
+O release acrescenta Internet em **Contas da Casa**, as categorias Viagens, Streaming, Fitness, Fatura de cartão e Acerto de outros grupos, e as subcategorias de Transporte. Os filtros e relatórios agrupam Contas da Casa e Transporte sem reclassificar despesas antigas. A lista mostra o saldo individual da pessoa autenticada por despesa e mantém o valor total como contexto. Os painéis do grupo e os meses da lista podem ser recolhidos por teclado ou mouse.
 
 Despesas recorrentes mensais sem término guardam um modelo separado e materializam registros somente até a competência atual. Uma chave única por série e mês evita duplicatas; ocorrências materializadas continuam sendo despesas normais. Ao abrir uma ocorrência recorrente para edição, a tela informa que somente aquela ocorrência será alterada. O botão de exclusão de uma ocorrência cria uma exceção para impedir que ela seja recriada.
 
 Admins podem exportar despesas e acertos do grupo aberto em CSV, usando o período selecionado nos relatórios. Acertos podem ser registrados como pendentes ou pagos; apenas pagamentos confirmados alteram os saldos. O pagador ou um admin pode confirmar um acerto pendente.
 
-As migrations 010 (`categorias_e_despesas_recorrentes`) e 011 (`acertos_pendentes`) foram validadas em um Supabase descartável com dados sintéticos. A compilação TypeScript/Vite passou. Na preparação deste release, a leitura remota encontrou 001–010 aplicadas; a origem e a data de aplicação da 010 não foram determinadas. Antes da publicação do frontend, foi feito backup lógico do schema/dados e a 011 foi aplicada; a conferência posterior confirmou 001–011 no Supabase. O frontend aguarda publicação no GitHub Pages. `.env.local` não foi lido.
+As migrations 010 (`categorias_e_despesas_recorrentes`) e 011 (`acertos_pendentes`) foram validadas em um Supabase descartável com dados sintéticos. O workflow `40095943551`, commit `6880da0`, concluiu build e deploy no GitHub Pages. A URL respondeu HTTP 200; o bundle publicado contém exportação CSV, recorrência mensal e acompanhamento de acertos pendentes/pagos. Na preparação deste release, a leitura remota encontrou 001–010 aplicadas; a origem e a data de aplicação da 010 não foram determinadas. Antes da publicação do frontend, foi feito backup lógico do schema/dados e a 011 foi aplicada; a conferência posterior confirmou 001–011 no Supabase. `.env.local` não foi lido.
 
 O acabamento mobile, acessibilidade básica e estados da interface, a exportação CSV e o acompanhamento de acertos compõem a Etapa 11. Consulte o [plano do projeto](PLANO_DO_PROJETO.md#etapa-11--estabilização-e-melhorias-de-uso-real) para detalhes da validação e do rollback deste release.
 

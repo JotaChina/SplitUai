@@ -65,6 +65,7 @@ const chartCategoryLabels: Record<ChartCategory, string> = { ...categoryLabels, 
 const settlementPaymentLabels: Record<SettlementPaymentMethod, string> = {
   pix: 'Pix', dinheiro: 'Dinheiro', transferencia: 'Transferência bancária', cartao: 'Cartão', outro: 'Outro', splitwise: 'Importado do Splitwise',
 }
+const brandLogoUrl = `${import.meta.env.BASE_URL}brand/splituai-graffiti.png`
 
 function toDateInputValue(date: Date) {
   return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
@@ -326,7 +327,7 @@ function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <a className="brand" href="#inicio" onClick={(event) => { event.preventDefault(); setPage('groups') }} aria-label="SplitUai — início">
-          <img className="brand-logo" src="/brand/splituai-graffiti.png" alt="SplitUai" />
+          <img className="brand-logo" src={brandLogoUrl} alt="SplitUai" />
         </a>
         <div className="side-label">MENU</div>
         <nav className="main-nav" aria-label="Navegação principal">
@@ -347,7 +348,7 @@ function App() {
       </aside>
 
       <main className="main-content">
-        <header className="topbar"><a className="mobile-brand" href="#inicio" onClick={(event) => { event.preventDefault(); setPage('groups') }} aria-label="SplitUai — início"><img className="brand-logo" src="/brand/splituai-graffiti.png" alt="SplitUai" /></a><div className="breadcrumb">Espaço pessoal <span>/</span> <strong>{page === 'account' ? 'Minha conta' : page === 'expense' ? 'Nova despesa' : page === 'profile' ? 'Perfil' : page === 'group' ? groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo' : page === 'new-group' ? 'Novo grupo' : 'Meus grupos'}</strong></div><div className="topbar-account"><button className="sign-out-button" onClick={() => void signOut()} disabled={authBusy}>Sair</button></div></header>
+        <header className="topbar"><a className="mobile-brand" href="#inicio" onClick={(event) => { event.preventDefault(); setPage('groups') }} aria-label="SplitUai — início"><img className="brand-logo" src={brandLogoUrl} alt="SplitUai" /></a><div className="breadcrumb">Espaço pessoal <span>/</span> <strong>{page === 'account' ? 'Minha conta' : page === 'expense' ? 'Nova despesa' : page === 'profile' ? 'Perfil' : page === 'group' ? groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo' : page === 'new-group' ? 'Novo grupo' : 'Meus grupos'}</strong></div><div className="topbar-account"><button className="sign-out-button" onClick={() => void signOut()} disabled={authBusy}>Sair</button></div></header>
 
         {page === 'groups' && <Groups groups={groups} loading={groupsLoading} error={groupsError} onRefresh={() => void refreshGroups()} onOpen={(id) => { setSelectedGroupId(id); setPage('group') }} onCreate={() => setPage('new-group')} />}
         {page === 'new-group' && <NewGroup onBack={() => setPage('groups')} onCreate={saveNewGroup} />}
@@ -997,7 +998,7 @@ function Login({ configured, onSignIn, busy, error }: {
     void onSignIn(email.trim(), password)
   }
 
-  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><img className="brand-logo" src="/brand/splituai-graffiti.png" alt="SplitUai" /></div><div className="eyebrow">BEM-VINDE DE VOLTA</div><h1>Que bom te ver<span className="heading-dot">.</span></h1><p className="form-intro">Entre na sua conta para continuar dividindo.</p><form onSubmit={submit}><label>Seu e-mail<input type="email" autoComplete="username" placeholder="voce@email.com" value={email} onChange={(event) => setEmail(event.target.value)} required disabled={!configured || busy} /></label><label>Senha<input type="password" autoComplete="current-password" placeholder="Sua senha" value={password} onChange={(event) => setPassword(event.target.value)} required disabled={!configured || busy} /></label><button className="button button-dark full-button" type="submit" disabled={!configured || busy}>{busy ? 'Entrando…' : 'Entrar'} <span>→</span></button>{!configured && <p className="auth-message" role="status">Autenticação não configurada neste ambiente. Novas contas continuam disponíveis somente por convite.</p>}{error && <p className="auth-error" role="alert">{error}</p>}<div className="login-footnote">O SplitUai é privado. O acesso é feito por convite; não há cadastro público.</div></form></section>
+  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><img className="brand-logo" src={brandLogoUrl} alt="SplitUai" /></div><div className="eyebrow">BEM-VINDE DE VOLTA</div><h1>Que bom te ver<span className="heading-dot">.</span></h1><p className="form-intro">Entre na sua conta para continuar dividindo.</p><form onSubmit={submit}><label>Seu e-mail<input type="email" autoComplete="username" placeholder="voce@email.com" value={email} onChange={(event) => setEmail(event.target.value)} required disabled={!configured || busy} /></label><label>Senha<input type="password" autoComplete="current-password" placeholder="Sua senha" value={password} onChange={(event) => setPassword(event.target.value)} required disabled={!configured || busy} /></label><button className="button button-dark full-button" type="submit" disabled={!configured || busy}>{busy ? 'Entrando…' : 'Entrar'} <span>→</span></button>{!configured && <p className="auth-message" role="status">Autenticação não configurada neste ambiente. Novas contas continuam disponíveis somente por convite.</p>}{error && <p className="auth-error" role="alert">{error}</p>}<div className="login-footnote">O SplitUai é privado. O acesso é feito por convite; não há cadastro público.</div></form></section>
 }
 
 function PasswordSetup({ onSubmit, onSignOut, busy, error }: {
@@ -1020,7 +1021,7 @@ function PasswordSetup({ onSubmit, onSignOut, busy, error }: {
     void onSubmit(password)
   }
 
-  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><img className="brand-logo" src="/brand/splituai-graffiti.png" alt="SplitUai" /></div><div className="eyebrow">CONVITE ACEITO</div><h1>Crie sua senha<span className="heading-dot">.</span></h1><p className="form-intro">Defina uma senha para entrar no SplitUai.</p><form onSubmit={submit}><label>Nova senha<input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={6} required disabled={busy} /></label><label>Confirme a senha<input type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={6} required disabled={busy} /></label><button className="button button-dark full-button" type="submit" disabled={busy}>{busy ? 'Salvando…' : 'Salvar senha'} <span>→</span></button>{(validationError || error) && <p className="auth-error" role="alert">{validationError ?? error}</p>}<button className="text-button auth-signout" type="button" onClick={() => void onSignOut()} disabled={busy}>Sair</button></form></section>
+  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><img className="brand-logo" src={brandLogoUrl} alt="SplitUai" /></div><div className="eyebrow">CONVITE ACEITO</div><h1>Crie sua senha<span className="heading-dot">.</span></h1><p className="form-intro">Defina uma senha para entrar no SplitUai.</p><form onSubmit={submit}><label>Nova senha<input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={6} required disabled={busy} /></label><label>Confirme a senha<input type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={6} required disabled={busy} /></label><button className="button button-dark full-button" type="submit" disabled={busy}>{busy ? 'Salvando…' : 'Salvar senha'} <span>→</span></button>{(validationError || error) && <p className="auth-error" role="alert">{validationError ?? error}</p>}<button className="text-button auth-signout" type="button" onClick={() => void onSignOut()} disabled={busy}>Sair</button></form></section>
 }
 
 function MyInvitations({ invitations, onRefresh, onAccept }: { invitations: MyGroupInvitation[]; onRefresh: () => void; onAccept: (id: string) => Promise<void> }) {

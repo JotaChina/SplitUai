@@ -2,13 +2,23 @@
 
 Aplicação web para organizar despesas compartilhadas em grupos pequenos.
 
-### Mudanças em revisão em 2026-10-23 · aguardando migration
+### Release de 2026-10-24 · banco atualizado, frontend aguardando publicação
 
 O código em revisão acrescenta Internet em **Contas da Casa**, as categorias Viagens, Streaming, Fitness, Fatura de cartão e Acerto de outros grupos, e as subcategorias de Transporte. Os filtros e relatórios agrupam Contas da Casa e Transporte sem reclassificar despesas antigas. A lista mostra o saldo individual da pessoa autenticada por despesa e mantém o valor total como contexto. Os painéis do grupo e os meses da lista podem ser recolhidos por teclado ou mouse.
 
 Despesas recorrentes mensais sem término guardam um modelo separado e materializam registros somente até a competência atual. Uma chave única por série e mês evita duplicatas; ocorrências materializadas continuam sendo despesas normais. Ao abrir uma ocorrência recorrente para edição, a tela informa que somente aquela ocorrência será alterada. O botão de exclusão de uma ocorrência cria uma exceção para impedir que ela seja recriada.
 
-A migration `supabase/migrations/20261023001000_categorias_e_despesas_recorrentes.sql` está **pendente**. Em 2026-10-23, a conferência somente leitura confirmou as migrations 001–009 no Supabase remoto e as 001–004 no Supabase local. A migration não foi aplicada a nenhum banco. O banco local foi deixado intacto porque a cadeia 005–009 inclui uma reclassificação histórica; o `.env.local` não foi usado. Não publique o frontend antes de aplicar e validar a migration em ambiente aprovado. Nenhuma alteração foi publicada no GitHub Pages.
+Admins podem exportar despesas e acertos do grupo aberto em CSV, usando o período selecionado nos relatórios. Acertos podem ser registrados como pendentes ou pagos; apenas pagamentos confirmados alteram os saldos. O pagador ou um admin pode confirmar um acerto pendente.
+
+As migrations 010 (`categorias_e_despesas_recorrentes`) e 011 (`acertos_pendentes`) foram validadas em um Supabase descartável com dados sintéticos. A compilação TypeScript/Vite passou. Na preparação deste release, a leitura remota encontrou 001–010 aplicadas; a origem e a data de aplicação da 010 não foram determinadas. Antes da publicação do frontend, foi feito backup lógico do schema/dados e a 011 foi aplicada; a conferência posterior confirmou 001–011 no Supabase. O frontend aguarda publicação no GitHub Pages. `.env.local` não foi lido.
+
+O acabamento mobile, acessibilidade básica e estados da interface, a exportação CSV e o acompanhamento de acertos compõem a Etapa 11. Consulte o [plano do projeto](PLANO_DO_PROJETO.md#etapa-11--estabilização-e-melhorias-de-uso-real) para detalhes da validação e do rollback deste release.
+
+#### Backup e rollback do release
+
+Antes de aplicar a migration 011, foram exportados o schema e os dados dos schemas do app. Os arquivos estão em `.production-backups/2026-10-24/`, ignorados pelo Git e protegidos pelo DPAPI do Windows para a conta atual. SHA-256: `schema.sql.dpapi` `A2D10082CEA5389454B089314BE62C54AF1EF3F91769C6307B54B8D22BD67D53`; `data.sql.dpapi` `0F7CB5FA0CA00DE736E91F1746DC61B0FFF51DFEB9384306DB2AC5A4366C2FFA`. Preserve essa pasta e esta conta Windows para recuperar os dumps.
+
+Para reverter a aplicação, primeiro execute `supabase/rollbacks/20261024001100_acertos_pendentes.sql` no Supabase vinculado; a transação aborta se houver acertos pendentes, para evitar apagar compromissos não pagos. Depois reverta o commit de release em `main`; o workflow Pages publica o frontend anterior. A migration 010 permanece instalada, pois já constava no histórico remoto antes deste release. Em incidente grave de dados/schema, os dumps pré-release são o ponto de recuperação; a restauração é manual e deve ser feita em janela de manutenção, preservando Auth e validando o banco antes de reabrir o app.
 
 ## Rodar localmente
 
@@ -46,9 +56,9 @@ VITE_SUPABASE_PUBLISHABLE_KEY=cole_a_chave_publicavel_localmente
 
 Com Docker Desktop aberto e as dependências instaladas (`npm ci`), execute `iniciar-teste-local.bat` na pasta do projeto. O atalho inicia o Supabase local, abre o Vite em `http://127.0.0.1:5173/SplitUai/` e força o app a usar `http://127.0.0.1:54321` com a chave publicável local, mesmo que exista um `.env.local` configurado para outro ambiente. O terminal do Vite fica em uma segunda janela; use `Ctrl+C` nela para parar o servidor. Fechar o app não aplica migrations.
 
-O atalho não aplica migrations nem importa dados. Na revisão de 2026-10-23, o banco Supabase local estava na migration 004, com 005–009 pendentes; portanto, funcionalidades que dependem dessas mudanças de schema podem não funcionar até que a cadeia seja revisada e aplicada com segurança em uma instância local adequada. O script não executa `db reset`, `db push` nem qualquer comando contra o projeto remoto.
+O atalho não aplica migrations nem importa dados. Na revisão de 2026-10-23, o banco Supabase local estava na migration 004, com 005–009 pendentes; portanto, funcionalidades que dependem dessas mudanças de schema podem não funcionar até que a cadeia seja revisada e aplicada com segurança em uma instância local adequada. A validação de 010/011 foi executada em uma instância descartável separada. O script não executa `db reset`, `db push` nem qualquer comando contra o projeto remoto.
 
-Após entrar, grupos, participantes, convites, despesas, saldos e sugestões de acerto usam o Supabase. Qualquer membro pode criar despesas; apenas admins podem editar ou excluir despesas. Saldos são calculados em centavos e sugestões não registram nem confirmam transferências. **Atenção:** o `.env.local` aponta para o projeto remoto `yzxeyqutmvjmrglmpcbb`; qualquer execução local do app com esse arquivo pode gravar nele. Para desenvolvimento sem tocar no remoto, inicie o Supabase local e use URL/chave locais; não use `.env.local` para testes.
+Após entrar, grupos, participantes, convites, despesas, saldos e sugestões de acerto usam o Supabase. Qualquer membro pode criar despesas; apenas admins podem editar ou excluir despesas. Saldos são calculados em centavos; sugestões são indicativas e não registram transferências. Acertos pagos registrados reduzem o saldo, enquanto os pendentes aparecem no histórico sem alterá-lo. **Atenção:** o `.env.local` aponta para o projeto remoto `yzxeyqutmvjmrglmpcbb`; qualquer execução local do app com esse arquivo pode gravar nele. Para desenvolvimento sem tocar no remoto, inicie o Supabase local e use URL/chave locais; não use `.env.local` para testes.
 
 ### Etapa publicada (2026-10-23)
 

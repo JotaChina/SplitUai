@@ -42,6 +42,8 @@ export type SettlementRecord = {
   settlement_date: string
   description: string
   payment_method: SettlementPaymentMethod
+  status: 'pending' | 'paid'
+  paid_at: string | null
   created_at: string
 }
 export type SettlementPaymentMethod = 'pix' | 'dinheiro' | 'transferencia' | 'cartao' | 'outro' | 'splitwise'
@@ -99,6 +101,7 @@ export function calculateBalances(expenses: ExpenseRecord[], memberIds: string[]
     }
   }
   for (const settlement of settlements) {
+    if (settlement.status === 'pending') continue
     if (month && settlement.settlement_date.slice(0, 7) !== month) continue
     if (!Number.isSafeInteger(settlement.amount_cents) || settlement.amount_cents < 1) throw new Error('Valor de acerto inválido.')
     add(settlement.paid_by, BigInt(settlement.amount_cents))
@@ -261,7 +264,7 @@ export async function listGroupExpenses(client: SupabaseClient, groupId: string)
 
 export async function listGroupSettlements(client: SupabaseClient, groupId: string) {
   const { data, error } = await client.from('group_settlements')
-    .select('id,group_id,created_by,paid_by,received_by,amount_cents,settlement_date,description,payment_method,created_at')
+    .select('id,group_id,created_by,paid_by,received_by,amount_cents,settlement_date,description,payment_method,status,paid_at,created_at')
     .eq('group_id', groupId).order('settlement_date', { ascending: false }).order('created_at', { ascending: false })
   if (error) throw error
   return (data ?? []).map((row) => ({ ...row, amount_cents: Number(row.amount_cents) })) as SettlementRecord[]
@@ -273,6 +276,7 @@ export async function createGroupSettlement(client: SupabaseClient, input: {
   amountCents: number
   settlementDate: string
   paymentMethod: Exclude<SettlementPaymentMethod, 'splitwise'>
+  status: 'pending' | 'paid'
 }) {
   if (!input.receivedBy) throw new Error('Escolha quem recebeu o pagamento.')
   if (!Number.isSafeInteger(input.amountCents) || input.amountCents < 1) throw new Error('Informe um valor válido para o acerto.')
@@ -283,9 +287,15 @@ export async function createGroupSettlement(client: SupabaseClient, input: {
     p_amount_cents: input.amountCents,
     p_settlement_date: input.settlementDate,
     p_payment_method: input.paymentMethod,
+    p_status: input.status,
   })
   if (error) throw new Error(error.message || `Falha ao registrar acerto (${error.code ?? 'erro desconhecido'}).`)
   return data as string
+}
+
+export async function markGroupSettlementPaid(client: SupabaseClient, settlementId: string) {
+  const { error } = await client.rpc('mark_group_settlement_paid', { p_settlement_id: settlementId })
+  if (error) throw new Error(error.message || `Falha ao confirmar pagamento (${error.code ?? 'erro desconhecido'}).`)
 }
 
 export type SplitwiseImportExpense = {

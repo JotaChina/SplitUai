@@ -249,7 +249,8 @@ Na revisão inicial, as funções auxiliares `is_current_user_group_member`, `is
 
 ## Andamento atual
 
-- **Status (2026-10-23):** versão publicada no GitHub Pages por `6e72f3a`, workflow `40022604851`; build e deploy concluídos e URL pública validada com HTTP 200. O histórico remoto contém migrations 001–008. Nenhum convite foi enviado nem pagamento ou dado financeiro foi registrado ou alterado durante a publicação.
+- **Próxima fase recomendada (2026-10-24):** após validar a Etapa 10 em Supabase isolado, concluir a Etapa 11 em mobile/acessibilidade, CSV e estados de acerto. A versão publicada permanece na migration 009; as migrations 010 e 011 ainda não foram aplicadas nem publicadas no remoto. Ver Etapas 10 e 11.
+- **Publicação histórica:** o release `6e72f3a` (workflow `40022604851`) concluiu build e deploy em 2026-10-23. A publicação posterior da Etapa 9, registrada abaixo, atualizou o estado vigente para migrations 001–009. A Etapa 10 foi validada no Supabase descartável; migration 010 e frontend seguem sem publicação.
 - **Projeto alvo (confirmado em 2026-10-23):** `yzxeyqutmvjmrglmpcbb`, SplitUai, São Paulo (`sa-east-1`). GitHub `JotaChina/SplitUai`, produção em `main`; o push publicado aplicou somente migrations já presentes no histórico remoto. O projeto Virginia `ipbnqofmggytdkgmadtc` permanece intocado.
 - **Banco e Auth:** aplicada `supabase/migrations/20261007000100_etapa_2_schema_e_rls.sql`; lint remoto sem erros. Todas as sete tabelas públicas estão com RLS habilitada e políticas explícitas. Teste transacional com dois membros de grupos distintos e um usuário externo retornou apenas grupos/dados autorizados; as linhas sintéticas foram revertidas e sua ausência foi conferida. Auth remoto atualizado para desabilitar cadastro público; URL de retorno aponta para o GitHub Pages. CLI Supabase 2.120.0 vinculada somente ao projeto alvo.
 - **Frontend publicado:** login, grupos, participantes, convites, despesas, saldos e sugestões usam sessão e chave publicável. Criação de despesa por qualquer membro; edição/exclusão por admin. Sugestões não registram pagamentos. A versão `6e72f3a` inclui fotos de grupos e perfis, gráficos por categoria e período, despesas agrupadas por mês, categoria Corrida, importação Splitwise e registro de acertos.
@@ -278,6 +279,7 @@ Na revisão inicial, as funções auxiliares `is_current_user_group_member`, `is
 | 2026-10-23 | Parcelas afetam saldos no mês de vencimento; mostrar saldos mensal e total lado a lado. “Quanto falta” é dívida líquida ainda não acertada. | Aprovado; implementado/testado local; pagamento de parcelas não é registrado |
 | 2026-10-23 | Participantes removidos ficam inativos no grupo; vínculos financeiros permanecem para preservar despesas, parcelas e saldos. | Migration 007 aplicada e validada localmente com checks RLS; não aplicada ao remoto |
 | 2026-10-23 | Convites são autorizados por RPC/RLS; Edge Function valida sessão, admin ativo e serializa envio. Contas existentes recebem OTP sem cadastro; convite só ativa associação após aceite autenticado. | Migration e função locais em revisão; entrega real depende de configurar SMTP/provedor Auth e publicar manualmente após autorização |
+| 2026-10-24 | Após estabilizar a Etapa 10, priorizar acabamento da experiência em uso real, exportação de dados e acompanhamento de acertos. | Etapa 10 validada isoladamente; Etapa 11 implementada localmente, sem publicação ou alteração remota |
 
 ## Notas operacionais
 
@@ -295,7 +297,7 @@ Na revisão inicial, as funções auxiliares `is_current_user_group_member`, `is
 - [x] Atualizar README e este plano. `npm run build` passou com Node 24.22.1; `git diff --check` passou. Nenhum teste adicional foi executado.
 - [x] Aplicar a migration `20261023000900_perfis_categorias_e_visao_admin.sql` ao Supabase vinculado. A listagem remota e o dry-run confirmaram que somente a 009 estava pendente; a verificação posterior confirmou 001–009 aplicadas. A migration altera schema, políticas e RPCs, sem reclassificar despesas ou registrar operações financeiras.
 - [x] Publicar o frontend depois da migration. O workflow `40030430010` concluiu build e deploy; `https://jotachina.github.io/SplitUai/` respondeu HTTP 200 e o bundle servido contém a Visão de admin, o campo PIX e Contas da Casa.
-- [ ] Para revisão autenticada local, usar Supabase local isolado, conta e dados sintéticos, e apontar `.env.local` à URL/chave locais. O `.env.local` existente aponta ao remoto e não deve ser usado para testes. Não usar reset no banco local atual; ele ainda está na 004, com 005–009 pendentes.
+- [ ] Para revisão autenticada visual da Etapa 10, usar Supabase local isolado, conta e dados sintéticos. A validação SQL isolada passou, mas a UI autenticada ainda não foi revisada. Não usar o `.env.local` existente nem reset no banco local atual; ele ainda está na 004, com 005–009 pendentes.
 
 ### Etapa 10 — Categorias, painéis recolhíveis, recorrências e posição individual (2026-10-23)
 
@@ -306,9 +308,26 @@ Na revisão inicial, as funções auxiliares `is_current_user_group_member`, `is
 - [x] Deixar explícito no formulário que uma despesa recorrente existente edita somente a ocorrência. Datas da ocorrência são bloqueadas para preservar sua competência e a chave de idempotência.
 - [x] Atualizar README e este plano. `npm run build` passou com o Node empacotado do Codex (Vite 7.3.7); não foram executados testes adicionais. A primeira tentativa com Node 20.11.1 falhou porque a versão é inferior ao requisito do Vite.
 - [x] Conferir em modo somente leitura: Supabase remoto contém 001–009; Supabase local contém 001–004. A tentativa de ler o Postgres local precisou de acesso Docker elevado; nenhuma linha financeira foi consultada.
-- [ ] Revisar e aplicar `20261023001000_categorias_e_despesas_recorrentes.sql` somente em ambiente aprovado. Não aplicada remotamente nem localmente; nenhum deploy foi feito. Para o banco local atual, não executar a cadeia automaticamente: 005–009 ainda estão pendentes e a 007 reclassifica registros históricos.
-- [ ] Validar visualmente fluxos autenticados com Supabase local isolado e dados sintéticos. A instância local existente não é adequada sem uma revisão/aprovação da cadeia pendente; `.env.local` aponta ao remoto e não foi usado.
+- [x] Revisar e aplicar `20261023001000_categorias_e_despesas_recorrentes.sql` somente no Supabase descartável `splituai-validation-isolated`, com a cadeia 001–009. `migration list --local` confirmou 001–010 aplicadas e `db lint --local` não encontrou erros. Nenhuma migration foi aplicada ao Supabase remoto nem ao schema do Supabase local existente.
+- [x] Validar com usuário, grupo e dados sintéticos em transação revertida: categoria Internet, criação de recorrência, materialização até outubro de 2026, ajuste da data para o último dia do mês, idempotência (9 ocorrências na primeira chamada, 0 na segunda), exceção após exclusão e negação a usuário fora do grupo. O `.env.local` não foi lido. Não houve validação visual autenticada do frontend.
 
 **Decisão de recorrência:** materializar registros financeiros ordinários somente até a competência consultada, com chave única (série, mês), e preservar cada ocorrência já criada como histórico independente. Editar uma ocorrência altera somente aquele registro; as próximas continuam seguindo o modelo da série. Apagar uma ocorrência grava uma exceção, sem alterar o saldo histórico de outros meses. A série não cria parcelas ou despesas futuras em massa.
 
-**Estado de entrega:** código e documentação serão enviados para revisão em branch `codex/melhorias-splituai`. A migration 010 está pendente, e o app precisa dela para persistir novas categorias e criar recorrências. Nenhum dado ou schema remoto foi alterado; nenhuma migration foi aplicada; não publicar na `main` nem fazer deploy sem autorização específica.
+**Estado de entrega:** migration 010 e fluxo recorrente foram validados no Supabase descartável. Na preparação de produção em 2026-10-24, a consulta remota encontrou 001–010 aplicadas, embora o registro anterior deste plano dissesse 001–009; a origem da aplicação da 010 não foi identificada e nenhuma nova aplicação da 010 foi feita nesta publicação. A CLI confirmou que apenas a 011 estava pendente.
+
+### Etapa 11 — Estabilização e melhorias de uso real (2026-10-24)
+
+Ordem executada:
+
+1. **Fechar a Etapa 10:** concluída a revisão e validação da migration 010 em Supabase isolado. A instância existente e `.env.local` não foram usados para as operações de validação.
+2. **Acabamento da experiência:** revisados layouts responsivos, foco visível, alvos de toque, redução de movimento, estados de carregamento, erro, lista vazia e anúncios acessíveis. A sessão expirada retorna à tela de login via estado Auth.
+3. **Exportação:** admins exportam um CSV delimitado por ponto e vírgula com despesas e acertos do grupo aberto e do período selecionado (semana, mês, intervalo ou todo o histórico). Valores vêm em centavos; acertos incluem forma e estado. Células potencialmente executáveis em planilhas recebem prefixo de segurança.
+4. **Acompanhamento de acertos:** `group_settlements` agora distingue `pending` e `paid`, mantendo registros antigos como pagos. Apenas pagos reduzem saldos; o pagador ou admin pode confirmar um pendente. Migration `20261024001100_acertos_pendentes.sql`; validação isolada confirmou status, data do pagamento, autorização e compatibilidade do RPC antigo.
+
+**Estado:** implementação concluída localmente e build TypeScript/Vite aprovado. Antes da migration 011, foi criado um backup lógico local do schema e dos dados do app, conferido por descriptografia e protegido com DPAPI; os arquivos ignorados pelo Git estão em `.production-backups/2026-10-24/`. A CLI confirmou 010 aplicada no remoto e somente 011 pendente; a 011 foi aplicada ao projeto São Paulo e a conferência posterior confirmou 001–011. O frontend aguarda publicação pelo Pages.
+
+**Rollback preparado para este release:** o rollback SQL transacional da 011 está em `supabase/rollbacks/20261024001100_acertos_pendentes.sql`; ele aborta se ainda houver acertos `pending`, preservando esses registros para decisão explícita. Execute a reversão do schema antes de reverter o frontend em `main`. A 010 permanece no banco porque já estava aplicada antes desta publicação. Os dumps pré-release estão protegidos para a conta Windows que os gerou; preserve o diretório e não o versione. O workflow de Pages publica a reversão após um commit de revert.
+
+**Prompt para iniciar em novo chat:**
+
+> A Etapa 10 e a Etapa 11 foram implementadas e preparadas para produção. A migration 010 já constava no histórico remoto e a 011 foi aplicada em 2026-10-24 depois de backup lógico protegido. O frontend ainda aguarda publicação pelo Pages. O rollback da 011 está em `supabase/rollbacks/20261024001100_acertos_pendentes.sql`; os dumps pré-release estão em `.production-backups/2026-10-24/`, ignorados pelo Git e protegidos via DPAPI da conta Windows atual. Não use `.env.local`.

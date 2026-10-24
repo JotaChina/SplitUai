@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from './lib/supabase'
 import {
@@ -38,6 +38,7 @@ import {
   listGroupExpenses,
   listGroupSettlements,
   createGroupSettlement,
+  markGroupSettlementPaid,
   parseBrlCents,
   splitEvenly,
   type SplitMode,
@@ -90,6 +91,45 @@ function isoWeekBounds(value: string): { start: string; end: string } | null {
   return { start: monday.toISOString().slice(0, 10), end: sunday.toISOString().slice(0, 10) }
 }
 
+function downloadGroupCsv(groupName: string, start: string, end: string, expenses: ExpenseRecord[], settlements: SettlementRecord[], members: GroupMemberView[]) {
+  const safeCell = (value: string | number) => {
+    const text = String(value)
+    const protectedText = /^[\s\u0000-\u001f]*[=+\-@]/.test(text) ? `'${text}` : text
+    return `"${protectedText.replaceAll('"', '""')}"`
+  }
+  const memberName = (id: string) => {
+    const person = members.find((member) => member.user_id === id)
+    return person?.username ? `@${person.username}` : person?.display_name || id
+  }
+  const header = ['tipo', 'data', 'descricao', 'categoria', 'valor_centavos', 'quem_pagou', 'recebido_por', 'forma_pagamento', 'status']
+  const rows: Array<Array<string | number>> = [header]
+  for (const expense of expenses) {
+    if (expense.expense_date < start || expense.expense_date > end) continue
+    rows.push(['despesa', expense.expense_date, expense.description, categoryLabels[expense.category], expense.amount_cents, memberName(expense.paid_by), '', '', ''])
+  }
+  for (const settlement of settlements) {
+    if (settlement.settlement_date < start || settlement.settlement_date > end) continue
+    rows.push(['acerto', settlement.settlement_date, settlement.description, '', settlement.amount_cents, memberName(settlement.paid_by), memberName(settlement.received_by), settlementPaymentLabels[settlement.payment_method] ?? settlement.payment_method, settlement.status === 'paid' ? 'pago' : 'pendente'])
+  }
+  const csv = `\uFEFF${rows.map((row) => row.map(safeCell).join(';')).join('\r\n')}`
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = `splituai-${groupName.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${start}-${end}.csv`
+  anchor.click()
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+}
+
+function BrandMark() {
+  return <svg className="brand-mark" viewBox="0 0 40 40" role="img" aria-label="Símbolo do SplitUai">
+    <rect width="40" height="40" rx="13" fill="#c8ed83" />
+    <path d="M20 7.5 33 31H7L20 7.5Z" fill="#c9443e" />
+    <path d="M20 13.1 28.1 27.5H11.9L20 13.1Z" fill="#c8ed83" />
+    <circle cx="20" cy="22.2" r="2.15" fill="#293124" />
+  </svg>
+}
+
 function App() {
   const [page, setPage] = useState<Page>('groups')
   const [session, setSession] = useState<Session | null>(null)
@@ -104,6 +144,7 @@ function App() {
   const [profileUserId, setProfileUserId] = useState<string | null>(null)
   const [editingExpense, setEditingExpense] = useState<ExpenseRecord | null>(null)
   const [myInvitations, setMyInvitations] = useState<MyGroupInvitation[]>([])
+  const hadSession = useRef(false)
 
   async function refreshGroups() {
     if (!supabase) return
@@ -123,7 +164,9 @@ function App() {
 
     let mounted = true
     const inviteLink = new URLSearchParams(window.location.hash.slice(1)).get('type') === 'invite'
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
+      if (event === 'SIGNED_OUT' && hadSession.current) setAuthError('Sua sessão foi encerrada. Entre novamente para continuar.')
+      hadSession.current = Boolean(nextSession)
       setSession(nextSession)
       setCheckingSession(false)
       if (inviteLink && nextSession) setInvitePasswordSetup(true)
@@ -132,6 +175,7 @@ function App() {
     void supabase.auth.getSession().then(({ data, error }) => {
       if (!mounted) return
       setSession(data.session)
+      hadSession.current = Boolean(data.session)
       setCheckingSession(false)
       if (error) setAuthError(error.message)
       if (inviteLink && data.session) setInvitePasswordSetup(true)
@@ -224,19 +268,19 @@ function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <a className="brand" href="#inicio" onClick={(event) => { event.preventDefault(); setPage('groups') }}>
-          <span className="brand-mark">s<span>.</span></span>
+          <BrandMark />
           <span>split<span className="brand-accent">uai</span></span>
         </a>
         <div className="side-label">MENU</div>
         <nav className="main-nav" aria-label="Navegação principal">
-          <button className={page === 'groups' || page === 'group' || page === 'new-group' || page === 'expense' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('groups')}>
-            <span className="nav-icon">▦</span> Meus grupos
+          <button aria-current={page === 'groups' || page === 'group' || page === 'new-group' || page === 'expense' ? 'page' : undefined} className={page === 'groups' || page === 'group' || page === 'new-group' || page === 'expense' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('groups')}>
+            <span className="nav-icon" aria-hidden="true">▦</span> Meus grupos
           </button>
-          <button className={page === 'account' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('account')}>
-            <span className="nav-icon">◎</span> Minha conta
+          <button aria-current={page === 'account' ? 'page' : undefined} className={page === 'account' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('account')}>
+            <span className="nav-icon" aria-hidden="true">◎</span> Minha conta
           </button>
-          <button className={page === 'invitations' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('invitations')}>
-            <span className="nav-icon">✉</span> Convites recebidos{myInvitations.length > 0 ? ` · ${myInvitations.length}` : ''}
+          <button aria-current={page === 'invitations' ? 'page' : undefined} className={page === 'invitations' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('invitations')}>
+            <span className="nav-icon" aria-hidden="true">✉</span> Convites recebidos{myInvitations.length > 0 ? ` · ${myInvitations.length}` : ''}
           </button>
         </nav>
         <div className="sidebar-bottom">
@@ -271,11 +315,11 @@ function Groups({ groups, loading, error, onRefresh, onOpen, onCreate }: {
 }) {
   const [showArchived, setShowArchived] = useState(false)
   const visibleGroups = groups.filter((group) => Boolean(group.archived_at) === showArchived)
-  return <section className="page-wrap">
+  return <section className="page-wrap" aria-busy={loading}>
     <div className="eyebrow">SEU ESPAÇO COMPARTILHADO</div>
     <div className="page-heading"><div><h1>Seus grupos<span className="heading-dot">.</span></h1><p>Grupos dos quais sua conta participa.</p></div><div className="heading-actions"><button className="button button-light" onClick={onRefresh} disabled={loading}>Atualizar</button><button className="button button-dark" onClick={onCreate}><span>＋</span> Novo grupo</button></div></div>
     {error && <p className="auth-error" role="alert">{error}</p>}
-    <div className="section-title"><div><h2>{showArchived ? 'Grupos arquivados' : 'Grupos ativos'}</h2><p>{loading ? 'Carregando…' : `${visibleGroups.length} ${visibleGroups.length === 1 ? 'grupo' : 'grupos'}`}</p></div><div className="heading-actions"><button className="button button-light" onClick={() => setShowArchived(false)} aria-pressed={!showArchived}>Ativos ({groups.filter((group) => !group.archived_at).length})</button><button className="button button-light" onClick={() => setShowArchived(true)} aria-pressed={showArchived}>Arquivados ({groups.filter((group) => group.archived_at).length})</button></div></div>
+    <div className="section-title"><div><h2>{showArchived ? 'Grupos arquivados' : 'Grupos ativos'}</h2><p role="status" aria-live="polite">{loading ? 'Carregando grupos…' : `${visibleGroups.length} ${visibleGroups.length === 1 ? 'grupo' : 'grupos'}`}</p></div><div className="heading-actions"><button className="button button-light" onClick={() => setShowArchived(false)} aria-pressed={!showArchived}>Ativos ({groups.filter((group) => !group.archived_at).length})</button><button className="button button-light" onClick={() => setShowArchived(true)} aria-pressed={showArchived}>Arquivados ({groups.filter((group) => group.archived_at).length})</button></div></div>
     <div className="group-grid">
       {visibleGroups.map((group, index) => <button className="group-card" key={group.id} onClick={() => onOpen(group.id)}><div className={`group-cover ${index % 2 === 0 ? 'cover-coast' : 'cover-dinner'} ${group.cover_url ? 'has-custom-cover' : ''}`} style={group.cover_url ? { backgroundImage: `linear-gradient(0deg,rgba(20,30,22,.55),transparent 65%),url("${group.cover_url}")`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}><span className="cover-tag">{group.archived_at ? 'ARQUIVADO' : 'GRUPO'}</span>{group.icon_url ? <img className="group-card-icon" src={group.icon_url} alt="" /> : <span className="cover-emoji">{index % 2 === 0 ? '✳' : '◌'}</span>}<div className="cover-caption">CRIADO EM {new Date(group.created_at).toLocaleDateString('pt-BR')}</div></div><div className="group-card-body"><div className="group-title-line"><h3>{group.name}</h3><span className="arrow-circle">↗</span></div><p>{group.description || 'Organize as despesas com seus participantes.'}</p><div className="group-meta"><span>{group.created_by ? 'Grupo compartilhado' : 'Grupo'}</span><span className="meta-divider" /><span>{group.archived_at ? 'Arquivado' : 'Despesas compartilhadas'}</span></div></div></button>)}
       {!loading && visibleGroups.length === 0 && <div className="empty-state"><strong>{showArchived ? 'Nenhum grupo arquivado.' : 'Você ainda não participa de um grupo ativo.'}</strong><p>{showArchived ? 'Grupos arquivados continuam disponíveis para consulta.' : 'Crie o primeiro para começar a organizar os participantes.'}</p>{!showArchived && <button className="button button-dark" onClick={onCreate}><span>＋</span> Criar grupo</button>}</div>}
@@ -327,6 +371,7 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense, o
   const [settlementRecipient, setSettlementRecipient] = useState('')
   const [settlementAmount, setSettlementAmount] = useState('')
   const [settlementMethod, setSettlementMethod] = useState<Exclude<SettlementPaymentMethod, 'splitwise'>>('pix')
+  const [settlementStatus, setSettlementStatus] = useState<'pending' | 'paid'>('paid')
   const [settlementDate, setSettlementDate] = useState(toDateInputValue(new Date()))
   const [splitwisePreview, setSplitwisePreview] = useState<SplitwiseCsvPreview | null>(null)
   const [splitwiseFileName, setSplitwiseFileName] = useState('')
@@ -351,7 +396,7 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense, o
   const currentUserBalanceOutsideMonth = (allBalances.find((row) => row.user_id === userId)?.balance_cents ?? 0)
     - (monthBalances.find((row) => row.user_id === userId)?.balance_cents ?? 0)
   const weekBounds = reportPeriod === 'week' ? isoWeekBounds(reportWeek) : null
-  const expenseDates = groupExpenses.map((expense) => expense.expense_date).sort()
+  const expenseDates = [...groupExpenses.map((expense) => expense.expense_date), ...groupSettlements.map((settlement) => settlement.settlement_date)].sort()
   const periodStart = reportPeriod === 'week' ? weekBounds?.start ?? '' : reportPeriod === 'month' ? `${reportMonth}-01` : reportPeriod === 'custom' ? rangeStart : expenseDates[0] ?? initialDateValue
   const periodEnd = reportPeriod === 'week' ? weekBounds?.end ?? '' : reportPeriod === 'month' && /^\d{4}-\d{2}$/.test(reportMonth)
     ? toDateInputValue(new Date(Number(reportMonth.slice(0, 4)), Number(reportMonth.slice(5, 7)), 0)) : reportPeriod === 'month' ? '' : reportPeriod === 'custom' ? rangeEnd : expenseDates[expenseDates.length - 1] ?? initialDateValue
@@ -523,15 +568,27 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense, o
         amountCents: parseBrlCents(settlementAmount),
         settlementDate,
         paymentMethod: settlementMethod,
+        status: settlementStatus,
       })
       setGroupSettlements(await listGroupSettlements(client, groupId))
       setSettlementFormOpen(false)
       setSettlementRecipient('')
       setSettlementAmount('')
       setSettlementDate(toDateInputValue(new Date()))
-      setSettlementNotice('Acerto registrado. Os saldos do grupo foram atualizados.')
+      setSettlementNotice(settlementStatus === 'paid' ? 'Pagamento confirmado. Os saldos do grupo foram atualizados.' : 'Acerto pendente registrado. Ele não altera os saldos até a confirmação do pagamento.')
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Não foi possível registrar o acerto.')
+    } finally { setBusy(false) }
+  }
+
+  async function confirmSettlementPaid(settlement: SettlementRecord) {
+    setBusy(true); setError(null)
+    try {
+      await markGroupSettlementPaid(client, settlement.id)
+      setGroupSettlements(await listGroupSettlements(client, groupId))
+      setSettlementNotice('Pagamento confirmado. Os saldos do grupo foram atualizados.')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'Não foi possível confirmar o pagamento.')
     } finally { setBusy(false) }
   }
 
@@ -600,19 +657,19 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense, o
       {isAdmin && <><button className="expense-edit" aria-label={`Editar ${expense.description}`} onClick={() => onEditExpense(expense)}>Editar</button><button className="expense-delete" aria-label={`Excluir ${expense.description}`} onClick={() => void removeExpense(expense)}>×</button></>}
     </div>
   }
-  return <section className="page-wrap"><button className="back-link" onClick={onBack}>← Voltar aos grupos</button><div className="detail-hero" style={group.cover_url ? { backgroundImage: `linear-gradient(90deg,rgba(18,28,17,.78),rgba(18,28,17,.2)),url("${group.cover_url}")`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}><div><div className="eyebrow">{group.archived_at ? 'GRUPO ARQUIVADO' : 'GRUPO'} · CRIADO EM {new Date(group.created_at).toLocaleDateString('pt-BR')}</div>{editing ? <form className="group-edit-form" onSubmit={(event) => void saveDetails(event)}><label>Nome<input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} required /></label><label>Descrição<textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1000} rows={2} /></label><div className="group-image-fields"><label>Foto do ícone<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setIconFile(event.target.files?.[0] ?? null)} /></label><label>Foto de capa<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setCoverFile(event.target.files?.[0] ?? null)} /></label></div><small>JPG, PNG ou WebP · até 5 MB por imagem.</small><div className="form-actions"><button type="button" className="button button-light" onClick={() => { setName(group.name); setDescription(group.description ?? ''); setIconFile(null); setCoverFile(null); setEditing(false) }}>Cancelar</button><button className="button button-dark" disabled={busy}>{busy ? 'Salvando…' : 'Salvar'}</button></div></form> : <><div className="group-hero-title">{group.icon_url && <img className="group-icon-large" src={group.icon_url} alt="" />}<h1>{group.name}<span className="heading-dot">.</span></h1></div><p>{group.description || 'Organize as despesas com seus participantes.'}</p>{isAdmin && <button className="text-button" onClick={() => setEditing(true)}>Editar informações</button>}</>}<div className="detail-people"><span>{members.length} {members.length === 1 ? 'participante' : 'participantes'} · Seu papel: {isAdmin ? 'admin' : 'membro'}</span></div><div className="heading-actions">{isAdmin && <button className="button button-light" aria-pressed={adminView} onClick={() => setAdminView((value) => !value)}>{adminView ? 'Visão comum' : 'Visão de admin'}</button>}<button className="button button-light" onClick={() => void archiveGroup()} disabled={busy}>{group.archived_at ? 'Restaurar grupo' : 'Arquivar grupo'}</button>{canDeleteGroup && <button className="button button-light" onClick={() => void permanentlyDeleteGroup()} disabled={busy}>Excluir grupo</button>}</div>{groupExpenses.length > 0 && <small>Grupos com despesas podem ser arquivados; o histórico não pode ser apagado.</small>}</div>{!group.cover_url && <div className="detail-illustration">✳</div>}</div>{error && <p className="auth-error" role="alert">{error}</p>}
+  return <section className="page-wrap" aria-busy={busy}><button className="back-link" onClick={onBack}>← Voltar aos grupos</button><div className="detail-hero" style={group.cover_url ? { backgroundImage: `linear-gradient(90deg,rgba(18,28,17,.78),rgba(18,28,17,.2)),url("${group.cover_url}")`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}><div><div className="eyebrow">{group.archived_at ? 'GRUPO ARQUIVADO' : 'GRUPO'} · CRIADO EM {new Date(group.created_at).toLocaleDateString('pt-BR')}</div>{editing ? <form className="group-edit-form" onSubmit={(event) => void saveDetails(event)}><label>Nome<input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} required /></label><label>Descrição<textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1000} rows={2} /></label><div className="group-image-fields"><label>Foto do ícone<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setIconFile(event.target.files?.[0] ?? null)} /></label><label>Foto de capa<input type="file" accept="image/png,image/jpeg,image/webp" onChange={(event) => setCoverFile(event.target.files?.[0] ?? null)} /></label></div><small>JPG, PNG ou WebP · até 5 MB por imagem.</small><div className="form-actions"><button type="button" className="button button-light" onClick={() => { setName(group.name); setDescription(group.description ?? ''); setIconFile(null); setCoverFile(null); setEditing(false) }}>Cancelar</button><button className="button button-dark" disabled={busy}>{busy ? 'Salvando…' : 'Salvar'}</button></div></form> : <><div className="group-hero-title">{group.icon_url && <img className="group-icon-large" src={group.icon_url} alt="" />}<h1>{group.name}<span className="heading-dot">.</span></h1></div><p>{group.description || 'Organize as despesas com seus participantes.'}</p>{isAdmin && <button className="text-button" onClick={() => setEditing(true)}>Editar informações</button>}</>}<div className="detail-people"><span>{members.length} {members.length === 1 ? 'participante' : 'participantes'} · Seu papel: {isAdmin ? 'admin' : 'membro'}</span></div><div className="heading-actions">{isAdmin && <button className="button button-light" aria-pressed={adminView} onClick={() => setAdminView((value) => !value)}>{adminView ? 'Visão comum' : 'Visão de admin'}</button>}<button className="button button-light" onClick={() => void archiveGroup()} disabled={busy}>{group.archived_at ? 'Restaurar grupo' : 'Arquivar grupo'}</button>{canDeleteGroup && <button className="button button-light" onClick={() => void permanentlyDeleteGroup()} disabled={busy}>Excluir grupo</button>}</div>{groupExpenses.length > 0 && <small>Grupos com despesas podem ser arquivados; o histórico não pode ser apagado.</small>}</div>{!group.cover_url && <div className="detail-illustration">✳</div>}</div>{error && <p className="auth-error" role="alert">{error}</p>}
     <details className="group-collapsible" open><summary><span><strong>Participantes</strong><small>{members.length} pessoas · perfis, papéis e acesso</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="member-list">{members.map((member) => <div className="member-row" key={member.user_id}>{member.avatar_url ? <img className="avatar avatar-photo" src={member.avatar_url} alt="" /> : <span className="avatar avatar-you">{(member.username?.[0] ?? member.display_name?.[0] ?? 'P').toUpperCase()}</span>}<button className="member-name-button" onClick={() => onOpenProfile(member.user_id)} title="Abrir perfil">{member.username ? `@${member.username}` : member.display_name || 'Sem identificador'}{!member.active && <small> · Acesso encerrado</small>}</button><span className="role-badge">{member.role === 'admin' ? 'Administrador' : 'Membro'}</span>{isAdmin && member.active && member.user_id !== userId && <><select aria-label={`Papel de ${member.username ?? member.display_name ?? 'participante'}`} value={member.role} disabled={busy} onChange={(event) => void memberRole(member, event.target.value as 'admin' | 'member')}><option value="member">Membro</option><option value="admin">Administrador</option></select><button className="text-button" disabled={busy} onClick={() => void memberRemove(member)}>Remover</button></>}</div>)}</div></details>
     {isAdmin && <details className="group-collapsible"><summary><span><strong>Convites</strong><small>{invitations.length} convites · enviar e acompanhar acessos</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="invite-panel"><form className="invite-form" onSubmit={(event) => void invite(event)}><label>E-mail da pessoa<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required placeholder="pessoa@email.com" disabled={busy} /></label><button className="button button-dark" disabled={busy}>{busy ? 'Enviando…' : 'Criar e enviar'}</button></form><p className="invite-help">A pessoa receberá um link seguro para entrar. Contas existentes recebem link de acesso; contas novas recebem convite para criar a senha. O aceite do grupo acontece depois que a pessoa entra e confirma o convite.</p>{error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}{invitations.length > 0 && <div className="invitation-list">{invitations.map((invitation) => { const expired = ['pending','sent'].includes(invitation.status) && new Date(invitation.expires_at) <= new Date(); const status = expired ? 'expired' : invitation.status; return <div className="invitation-row" key={invitation.id}><div><strong>{invitation.invited_email}</strong><small>Expira em {new Date(invitation.expires_at).toLocaleDateString('pt-BR')}</small></div><span className={`invite-status status-${status}`}>{status === 'pending' ? 'Pendente' : status === 'sent' ? 'Enviado' : status === 'accepted' ? 'Aceito' : status === 'cancelled' ? 'Cancelado' : 'Expirado'}</span>{isAdmin && ['pending','sent'].includes(invitation.status) && !expired && <><button className="text-button" disabled={busy} onClick={() => void invitationAction(invitation,'send')}>{invitation.status === 'sent' ? 'Reenviar' : 'Enviar'}</button><button className="text-button" disabled={busy} onClick={() => void invitationAction(invitation,'cancel')}>Cancelar</button></>}</div> })}</div>}</div></details>}
     {isAdmin && adminView && <details className="group-collapsible admin-tools"><summary><span><strong>Ferramentas administrativas</strong><small>Importar histórico do Splitwise</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><section className="settlement-panel splitwise-import"><div><div className="eyebrow">VISÃO DE ADMIN</div><h3>Importar histórico do Splitwise</h3><p>Despesas entram como despesas e pagamentos entram como acertos, separados dos gráficos. Reimportar o mesmo arquivo não duplica os registros.</p></div><label>Arquivo CSV<input type="file" accept=".csv,text/csv" disabled={busy} onChange={(event) => void chooseSplitwiseFile(event.target.files?.[0])} /></label>{splitwisePreview && <><strong>{splitwiseFileName}: {splitwisePreview.expenses.length} despesas · {splitwisePreview.settlements.length} acertos · {splitwisePreview.skipped.length} linhas ignoradas</strong><div className="splitwise-mappings">{splitwisePreview.memberNames.map((person) => <label key={person}>{person}<select value={splitwiseMappings[person] ?? ''} onChange={(event) => setSplitwiseMappings((current) => ({ ...current, [person]: event.target.value }))}><option value="">Selecione participante</option>{members.map((member) => <option key={member.user_id} value={member.user_id}>{member.username ? `@${member.username}` : member.display_name || 'Sem identificador'}{!member.active ? ' (acesso encerrado)' : ''}</option>)}</select></label>)}</div>{splitwisePreview.skipped.length > 0 && <details><summary>Ver linhas ignoradas</summary><ul>{splitwisePreview.skipped.map((row) => <li key={row.row}>Linha {row.row} · {row.description}: {row.reason}</li>)}</ul></details>}<div className="form-actions"><button className="button button-light" disabled={busy} onClick={() => setSplitwisePreview(null)}>Cancelar</button><button className="button button-dark" disabled={busy || splitwisePreview.expenses.length + splitwisePreview.settlements.length === 0} onClick={() => void importSplitwise()}>{busy ? 'Importando…' : 'Importar histórico'}</button></div></>}</section></details>}
     <div className="detail-stats"><div><small>DESPESAS DO GRUPO</small><strong>{groupExpenses.length}</strong></div><div><small>PARTICIPANTES</small><strong>{members.length}</strong></div><div><small>VALOR DEVEDOR TOTAL</small><strong>{formatBrlCents(allTimeDebtTotal)}</strong></div><button className="button button-dark" onClick={onAddExpense}><span>＋</span> Nova despesa</button></div>
     <details className="group-collapsible" open><summary><span><strong>Saldos em paralelo</strong><small>Saldo do mês e de todo o período</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="balance-columns"><section className="settlement-panel"><h3>Saldo do mês · {new Date(`${currentMonth}-01T12:00:00`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}</h3>{renderBalances(monthBalances)}<strong>Total devedor do mês: {formatBrlCents(monthDebtTotal)}</strong><small className="balance-period-note">{currentUserBalanceOutsideMonth === 0 ? 'Seu saldo dos demais períodos está zerado.' : `Nos demais períodos, ${currentUserBalanceOutsideMonth < 0 ? 'você deve' : 'você recebe'} ${formatBrlCents(Math.abs(currentUserBalanceOutsideMonth))}.`}</small></section><section className="settlement-panel"><h3>Saldo de todo o período</h3>{renderBalances(allBalances)}<strong>Falta acertar: {formatBrlCents(allTimeDebtTotal)}</strong></section></div></details>
     <details className="settlement-panel group-collapsible" open><summary><span><strong>Sugestões e registro de acerto</strong><small>{settlements.length ? `${settlements.length} transferências sugeridas · todo o período` : 'Todos estão em dia'}</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="settlement-panel-content"><div className="settlement-panel-heading"><h3>Acertos do grupo</h3><button className="button button-dark" type="button" onClick={() => { setSettlementFormOpen((open) => !open); setError(null); setSettlementNotice(null) }}>{settlementFormOpen ? 'Cancelar acerto' : '＋ Acertar contas'}</button></div>{settlements.length ? <div className="settlement-list">{settlements.map((item, index) => <div className="balance-row" key={`${item.from_user_id}-${item.to_user_id}-${index}`}><span>{memberLink(item.from_user_id)} paga para {memberLink(item.to_user_id)}</span><strong>{formatBrlCents(item.amount_cents)}</strong></div>)}</div> : <p>Todos estão em dia. Não há transferências sugeridas.</p>}<small>As sugestões mostram valores para quitar o saldo. Você também pode registrar pagamentos parciais.</small>
-      {settlementFormOpen && <form className="settlement-form" onSubmit={(event) => void saveSettlement(event)}><p>Registre um pagamento feito por você. O valor pode ser parcial e não precisa quitar toda a dívida.</p><div className="settlement-form-fields"><label>Quem recebeu?<select required value={settlementRecipient} onChange={(event) => setSettlementRecipient(event.target.value)}><option value="">Escolha uma pessoa</option>{members.filter((member) => member.user_id !== userId).map((member) => <option key={member.user_id} value={member.user_id}>{memberLabel(member.user_id)}{member.active ? '' : ' · sem acesso'}</option>)}</select></label><label>Valor pago<input required type="text" inputMode="decimal" placeholder="0,00" value={settlementAmount} onChange={(event) => setSettlementAmount(event.target.value)} /></label><label>Como foi pago?<select value={settlementMethod} onChange={(event) => setSettlementMethod(event.target.value as Exclude<SettlementPaymentMethod, 'splitwise'>)}><option value="pix">Pix</option><option value="dinheiro">Dinheiro</option><option value="transferencia">Transferência bancária</option><option value="cartao">Cartão</option><option value="outro">Outro</option></select></label><label>Data do pagamento<input required type="date" value={settlementDate} onChange={(event) => setSettlementDate(event.target.value)} /></label></div><div className="form-actions"><button type="button" className="button button-light" disabled={busy} onClick={() => setSettlementFormOpen(false)}>Cancelar</button><button type="submit" className="button button-dark" disabled={busy || !settlementRecipient || !settlementAmount.trim()}>{busy ? 'Registrando…' : 'Registrar pagamento'}</button></div></form>}
+      {settlementFormOpen && <form className="settlement-form" onSubmit={(event) => void saveSettlement(event)}><p>Registre um pagamento feito ou combinado por você. Acertos pendentes ficam no histórico e só alteram os saldos depois de confirmados.</p><div className="settlement-form-fields"><label>Quem recebeu?<select required value={settlementRecipient} onChange={(event) => setSettlementRecipient(event.target.value)}><option value="">Escolha uma pessoa</option>{members.filter((member) => member.user_id !== userId).map((member) => <option key={member.user_id} value={member.user_id}>{memberLabel(member.user_id)}{member.active ? '' : ' · sem acesso'}</option>)}</select></label><label>Valor<input required type="text" inputMode="decimal" placeholder="0,00" value={settlementAmount} onChange={(event) => setSettlementAmount(event.target.value)} /></label><label>Forma de pagamento<select value={settlementMethod} onChange={(event) => setSettlementMethod(event.target.value as Exclude<SettlementPaymentMethod, 'splitwise'>)}><option value="pix">Pix</option><option value="dinheiro">Dinheiro</option><option value="transferencia">Transferência bancária</option><option value="cartao">Cartão</option><option value="outro">Outro</option></select></label><label>Status<select value={settlementStatus} onChange={(event) => setSettlementStatus(event.target.value as 'pending' | 'paid')}><option value="paid">Pago</option><option value="pending">Pendente</option></select></label><label>{settlementStatus === 'paid' ? 'Data do pagamento' : 'Data prevista'}<input required type="date" value={settlementDate} onChange={(event) => setSettlementDate(event.target.value)} /></label></div><div className="form-actions"><button type="button" className="button button-light" disabled={busy} onClick={() => setSettlementFormOpen(false)}>Cancelar</button><button type="submit" className="button button-dark" disabled={busy || !settlementRecipient || !settlementAmount.trim()}>{busy ? 'Registrando…' : settlementStatus === 'paid' ? 'Registrar pagamento' : 'Registrar como pendente'}</button></div></form>}
       {settlementNotice && <p className="auth-message" role="status">{settlementNotice}</p>}
     </div></details>
-    {groupSettlements.length > 0 && <details className="settlement-panel settlement-history"><summary><span><strong>Acertos registrados</strong><small>{groupSettlements.length} {groupSettlements.length === 1 ? 'pagamento confirmado' : 'pagamentos confirmados'}</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="settlement-list">{groupSettlements.map((item) => { const paidByUser = item.paid_by === userId; const receivedByUser = item.received_by === userId; return <div className={`balance-row settlement-row${paidByUser ? ' settlement-paid' : receivedByUser ? ' settlement-received' : ''}`} key={item.id}><span><strong>{paidByUser ? <>Você pagou para {memberLink(item.received_by)}</> : receivedByUser ? <>{memberLink(item.paid_by)} pagou para você</> : <>{memberLink(item.paid_by)} pagou para {memberLink(item.received_by)}</>}</strong><small>{item.description} · {settlementPaymentLabels[item.payment_method] ?? 'Forma não informada'} · {new Date(`${item.settlement_date}T12:00:00`).toLocaleDateString('pt-BR')}</small></span><strong>{formatBrlCents(item.amount_cents)}</strong></div> })}</div><small>Acertos reduzem os saldos e ficam separados do total de despesas. Vermelho: você pagou; verde: você recebeu.</small></details>}
+    {groupSettlements.length > 0 && <details className="settlement-panel settlement-history"><summary><span><strong>Histórico de acertos</strong><small>{groupSettlements.filter((item) => item.status === 'pending').length} pendentes · {groupSettlements.filter((item) => item.status === 'paid').length} pagos</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="settlement-list">{groupSettlements.map((item) => { const paidByUser = item.paid_by === userId; const receivedByUser = item.received_by === userId; const pending = item.status === 'pending'; const canConfirm = pending && (paidByUser || isAdmin); return <div className={`balance-row settlement-row${pending ? ' settlement-pending' : paidByUser ? ' settlement-paid' : receivedByUser ? ' settlement-received' : ''}`} key={item.id}><span><strong>{paidByUser ? <>Você {pending ? 'combinou pagar' : 'pagou'} para {memberLink(item.received_by)}</> : receivedByUser ? <>{memberLink(item.paid_by)} {pending ? 'combinou pagar para você' : 'pagou para você'}</> : <>{memberLink(item.paid_by)} {pending ? 'combinou pagar para' : 'pagou para'} {memberLink(item.received_by)}</>}<em className={`settlement-status settlement-status-${item.status}`}>{pending ? 'Pendente' : 'Pago'}</em></strong><small>{item.description} · {settlementPaymentLabels[item.payment_method] ?? 'Forma não informada'} · {pending ? 'Previsto para' : 'Pago em'} {new Date(`${item.settlement_date}T12:00:00`).toLocaleDateString('pt-BR')}</small></span><strong>{formatBrlCents(item.amount_cents)}</strong>{canConfirm && <button className="button button-light settlement-confirm" disabled={busy} onClick={() => void confirmSettlementPaid(item)} aria-label={`Confirmar pagamento de ${formatBrlCents(item.amount_cents)} para ${memberLabel(item.received_by)}`}>Confirmar pagamento</button>}</div> })}</div><small>Somente acertos pagos reduzem os saldos. Despesas e acertos ficam separados nos relatórios; pendentes permanecem como previsão.</small></details>}
     <details className="group-collapsible report-collapsible" open><summary><span><strong>Relatórios e gráficos</strong><small>Despesas por categoria, período e tendência</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="report-section-content">
-      <div className="chart-switch" role="group" aria-label="Tipo de gráfico"><button className={chartType === 'bars' ? 'selected' : ''} onClick={() => setChartType('bars')}>Barras</button><button className={chartType === 'donut' ? 'selected' : ''} onClick={() => setChartType('donut')}>Rosca</button><button className={chartType === 'trend' ? 'selected' : ''} onClick={() => setChartType('trend')}>Tendência</button></div>
+      <div className="chart-switch" role="group" aria-label="Tipo de gráfico"><button aria-pressed={chartType === 'bars'} className={chartType === 'bars' ? 'selected' : ''} onClick={() => setChartType('bars')}>Barras</button><button aria-pressed={chartType === 'donut'} className={chartType === 'donut' ? 'selected' : ''} onClick={() => setChartType('donut')}>Rosca</button><button aria-pressed={chartType === 'trend'} className={chartType === 'trend' ? 'selected' : ''} onClick={() => setChartType('trend')}>Tendência</button></div>
     <div className="report-controls">
       <label>Período<select value={reportPeriod} onChange={(event) => setReportPeriod(event.target.value as 'week' | 'month' | 'custom' | 'all')}><option value="week">Semana</option><option value="month">Mês</option><option value="custom">Intervalo selecionado</option><option value="all">Desde o início · todo o período</option></select></label>
       {reportPeriod === 'week' && <label>Semana<input aria-label="Escolher semana" type="week" value={reportWeek} onChange={(event) => setReportWeek(event.target.value)} /></label>}
@@ -622,6 +679,7 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense, o
     {reportPeriod === 'custom' && rangeStart && rangeEnd && rangeStart > rangeEnd
       ? <p className="report-range-summary report-range-error">A data inicial precisa ser anterior à data final.</p>
       : <p className="report-range-summary">{reportExpenses.length} {reportExpenses.length === 1 ? 'despesa' : 'despesas'} · {reportPeriod === 'all' ? 'desde o início' : periodStart && periodEnd ? `${new Date(`${periodStart}T12:00:00`).toLocaleDateString('pt-BR')} a ${new Date(`${periodEnd}T12:00:00`).toLocaleDateString('pt-BR')}` : 'selecione um período'} · {formatBrlCents(reportExpenses.reduce((sum, expense) => sum + expense.amount_cents, 0))}</p>}
+      {isAdmin && <div className="report-export"><button type="button" className="button button-light" disabled={!validReportRange || (reportPeriod === 'custom' && rangeStart > rangeEnd)} onClick={() => downloadGroupCsv(group.name, periodStart, periodEnd, groupExpenses, groupSettlements, members)}>Exportar despesas e acertos em CSV</button><small>Somente dados deste grupo, no período selecionado.</small></div>}
     {validReportRange
       ? <GroupExpenseCharts rows={categoryTotals} expenses={reportExpenses} periodStart={periodStart} periodEnd={periodEnd} labels={chartCategoryLabels} format={formatBrlCents} chartType={chartType} onSelectCategory={setCategoryFilter} />
       : <div className="chart-card"><p className="chart-empty">Escolha um período válido para visualizar os gastos.</p></div>}</div></details>
@@ -796,7 +854,7 @@ function Login({ configured, onSignIn, busy, error }: {
     void onSignIn(email.trim(), password)
   }
 
-  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><span className="brand-mark">s<span>.</span></span><span>split<span className="brand-accent">uai</span></span></div><div className="eyebrow">BEM-VINDE DE VOLTA</div><h1>Que bom te ver<span className="heading-dot">.</span></h1><p className="form-intro">Entre na sua conta para continuar dividindo.</p><form onSubmit={submit}><label>Seu e-mail<input type="email" autoComplete="username" placeholder="voce@email.com" value={email} onChange={(event) => setEmail(event.target.value)} required disabled={!configured || busy} /></label><label>Senha<input type="password" autoComplete="current-password" placeholder="Sua senha" value={password} onChange={(event) => setPassword(event.target.value)} required disabled={!configured || busy} /></label><button className="button button-dark full-button" type="submit" disabled={!configured || busy}>{busy ? 'Entrando…' : 'Entrar'} <span>→</span></button>{!configured && <p className="auth-message" role="status">Autenticação não configurada neste ambiente. Novas contas continuam disponíveis somente por convite.</p>}{error && <p className="auth-error" role="alert">{error}</p>}<div className="login-footnote">O SplitUai é privado. O acesso é feito por convite; não há cadastro público.</div></form></section>
+  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><BrandMark /><span>split<span className="brand-accent">uai</span></span></div><div className="eyebrow">BEM-VINDE DE VOLTA</div><h1>Que bom te ver<span className="heading-dot">.</span></h1><p className="form-intro">Entre na sua conta para continuar dividindo.</p><form onSubmit={submit}><label>Seu e-mail<input type="email" autoComplete="username" placeholder="voce@email.com" value={email} onChange={(event) => setEmail(event.target.value)} required disabled={!configured || busy} /></label><label>Senha<input type="password" autoComplete="current-password" placeholder="Sua senha" value={password} onChange={(event) => setPassword(event.target.value)} required disabled={!configured || busy} /></label><button className="button button-dark full-button" type="submit" disabled={!configured || busy}>{busy ? 'Entrando…' : 'Entrar'} <span>→</span></button>{!configured && <p className="auth-message" role="status">Autenticação não configurada neste ambiente. Novas contas continuam disponíveis somente por convite.</p>}{error && <p className="auth-error" role="alert">{error}</p>}<div className="login-footnote">O SplitUai é privado. O acesso é feito por convite; não há cadastro público.</div></form></section>
 }
 
 function PasswordSetup({ onSubmit, onSignOut, busy, error }: {
@@ -819,7 +877,7 @@ function PasswordSetup({ onSubmit, onSignOut, busy, error }: {
     void onSubmit(password)
   }
 
-  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><span className="brand-mark">s<span>.</span></span><span>split<span className="brand-accent">uai</span></span></div><div className="eyebrow">CONVITE ACEITO</div><h1>Crie sua senha<span className="heading-dot">.</span></h1><p className="form-intro">Defina uma senha para entrar no SplitUai.</p><form onSubmit={submit}><label>Nova senha<input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={6} required disabled={busy} /></label><label>Confirme a senha<input type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={6} required disabled={busy} /></label><button className="button button-dark full-button" type="submit" disabled={busy}>{busy ? 'Salvando…' : 'Salvar senha'} <span>→</span></button>{(validationError || error) && <p className="auth-error" role="alert">{validationError ?? error}</p>}<button className="text-button auth-signout" type="button" onClick={() => void onSignOut()} disabled={busy}>Sair</button></form></section>
+  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><BrandMark /><span>split<span className="brand-accent">uai</span></span></div><div className="eyebrow">CONVITE ACEITO</div><h1>Crie sua senha<span className="heading-dot">.</span></h1><p className="form-intro">Defina uma senha para entrar no SplitUai.</p><form onSubmit={submit}><label>Nova senha<input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={6} required disabled={busy} /></label><label>Confirme a senha<input type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={6} required disabled={busy} /></label><button className="button button-dark full-button" type="submit" disabled={busy}>{busy ? 'Salvando…' : 'Salvar senha'} <span>→</span></button>{(validationError || error) && <p className="auth-error" role="alert">{validationError ?? error}</p>}<button className="text-button auth-signout" type="button" onClick={() => void onSignOut()} disabled={busy}>Sair</button></form></section>
 }
 
 function MyInvitations({ invitations, onRefresh, onAccept }: { invitations: MyGroupInvitation[]; onRefresh: () => void; onAccept: (id: string) => Promise<void> }) {
@@ -843,7 +901,7 @@ function UserProfile({ client, userId, viewerId, onBack, onOpenGroup }: {
   onOpenGroup: (id: string) => void
 }) {
   const [profile, setProfile] = useState<GroupProfileRecord | null>(null)
-  const [sharedGroups, setSharedGroups] = useState<{ id: string; name: string; created_at: string; archived_at: string | null; sharedSince: string; viewerBalance: number; profileBalance: number; history: { id: string; date: string; description: string; amount: number; kind: 'expense' | 'settlement' }[] }[]>([])
+  const [sharedGroups, setSharedGroups] = useState<{ id: string; name: string; created_at: string; archived_at: string | null; sharedSince: string; viewerBalance: number; profileBalance: number; history: { id: string; date: string; description: string; amount: number; kind: 'expense' | 'settlement'; status?: 'pending' | 'paid' }[] }[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
@@ -877,7 +935,7 @@ function UserProfile({ client, userId, viewerId, onBack, onOpenGroup }: {
           const involved = (expense: ExpenseRecord, id: string) => expense.paid_by === id || expense.shares.some((share) => share.user_id === id)
           const history = [
             ...expenses.filter((expense) => involved(expense, viewerId) && involved(expense, userId)).map((expense) => ({ id: expense.id, date: expense.expense_date, description: expense.description, amount: expense.amount_cents, kind: 'expense' as const })),
-            ...settlements.filter((item) => [item.paid_by, item.received_by].includes(viewerId) && [item.paid_by, item.received_by].includes(userId)).map((item) => ({ id: item.id, date: item.settlement_date, description: item.description, amount: item.amount_cents, kind: 'settlement' as const })),
+            ...settlements.filter((item) => [item.paid_by, item.received_by].includes(viewerId) && [item.paid_by, item.received_by].includes(userId)).map((item) => ({ id: item.id, date: item.settlement_date, description: item.description, amount: item.amount_cents, kind: 'settlement' as const, status: item.status })),
           ].sort((a, b) => b.date.localeCompare(a.date))
           const targetMembership = (memberships ?? []).find((row) => row.group_id === group.id)
           return {
@@ -907,7 +965,7 @@ function UserProfile({ client, userId, viewerId, onBack, onOpenGroup }: {
       {sharedGroups.length === 0 ? <div className="empty-expenses"><strong>Nenhum grupo ativo em comum.</strong><p>Os detalhes do perfil ficam disponíveis para pessoas que compartilham um grupo ativo.</p></div> : <div className="profile-groups">{sharedGroups.map((group) => <article className="settlement-panel profile-group" key={group.id}>
         <div className="profile-group-heading"><div><h3>{group.name}</h3><small>Período do grupo: {new Date(group.created_at).toLocaleDateString('pt-BR')} – {group.archived_at ? new Date(group.archived_at).toLocaleDateString('pt-BR') : 'em andamento'} · Em comum desde {new Date(group.sharedSince).toLocaleDateString('pt-BR')}</small></div><button className="button button-light" onClick={() => onOpenGroup(group.id)}>Abrir grupo</button></div>
         <div className="profile-balances"><p>Seu saldo no grupo <strong className={group.viewerBalance > 0 ? 'balance-positive' : group.viewerBalance < 0 ? 'balance-negative' : ''}>{formatBrlCents(group.viewerBalance)}</strong></p><p>Saldo de {profile.username ? `@${profile.username}` : 'esta pessoa'} <strong className={group.profileBalance > 0 ? 'balance-positive' : group.profileBalance < 0 ? 'balance-negative' : ''}>{formatBrlCents(group.profileBalance)}</strong></p></div>
-        <details className="profile-history"><summary>Histórico compartilhado · {group.history.length} registros</summary>{group.history.length === 0 ? <p>Nenhuma despesa ou acerto compartilhado neste grupo.</p> : <div className="settlement-list">{group.history.map((item) => <div className="balance-row" key={`${item.kind}-${item.id}`}><span><strong>{item.description}</strong><small>{item.kind === 'expense' ? 'Despesa' : 'Acerto'} · {new Date(`${item.date}T12:00:00`).toLocaleDateString('pt-BR')}</small></span><strong>{formatBrlCents(item.amount)}</strong></div>)}</div>}</details>
+        <details className="profile-history"><summary>Histórico compartilhado · {group.history.length} registros</summary>{group.history.length === 0 ? <p>Nenhuma despesa ou acerto compartilhado neste grupo.</p> : <div className="settlement-list">{group.history.map((item) => <div className="balance-row" key={`${item.kind}-${item.id}`}><span><strong>{item.description}</strong><small>{item.kind === 'expense' ? 'Despesa' : item.status === 'pending' ? 'Acerto pendente' : 'Acerto pago'} · {new Date(`${item.date}T12:00:00`).toLocaleDateString('pt-BR')}</small></span><strong>{formatBrlCents(item.amount)}</strong></div>)}</div>}</details>
       </article>)}</div>}
     </>}
   </section>

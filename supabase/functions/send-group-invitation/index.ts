@@ -4,6 +4,8 @@ const allowedOrigins = new Set([
   'https://jotachina.github.io',
   'http://localhost:5173',
   'http://127.0.0.1:5173',
+  'http://192.168.3.140:5173',
+  'https://192.168.3.140:5173',
   'http://127.0.0.1:4174',
 ])
 

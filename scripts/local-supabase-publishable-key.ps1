@@ -1,9 +1,10 @@
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 
-$output = & npx --no-install supabase status --output json 2>$null
+$output = & npx --no-install supabase status --output json 2>&1 | ForEach-Object { $_.ToString() }
+$statusExitCode = $LASTEXITCODE
 $raw = $output -join [Environment]::NewLine
 $jsonMatch = [regex]::Match($raw, '(?s)\{.*\}')
-if (-not $jsonMatch.Success) {
+if ($statusExitCode -ne 0 -or -not $jsonMatch.Success) {
   exit 1
 }
 

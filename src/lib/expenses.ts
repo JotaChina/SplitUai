@@ -66,21 +66,36 @@ export function suggestExpenseCategory(title: string): ExpenseCategory | null {
   const normalized = title.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLocaleLowerCase('pt-BR')
     .replace(/[^\p{L}\p{N}]+/gu, ' ').trim()
   const rules: Array<[ExpenseCategory, RegExp]> = [
-    ['internet', /\b(internet|wifi|wi fi|banda larga)\b/],
-    ['agua', /\b(agua|saneamento|hidraulica)\b/],
-    ['luz', /\b(luz|energia eletrica|eletricidade)\b/],
-    ['aluguel', /\b(aluguel|locacao)\b/],
+    ['internet', /\b(internet|wifi|wi fi|banda larga|provedor)\b/],
+    ['agua', /\b(conta de agua|agua|saneamento|esgoto)\b/],
+    ['luz', /\b(conta de luz|energia eletrica|eletricidade|conta de energia)\b/],
     ['iptu', /\biptu\b/],
-    ['transporte_gasolina', /\b(gasolina|combustivel|etanol|diesel)\b/],
-    ['transporte_onibus', /\b(onibus|metro|trem)\b/],
-    ['transporte_aviao', /\b(aviao|passagem aerea|voo)\b/],
-    ['transporte_pedagio', /\b(pedagio)\b/],
-    ['transporte_corrida_app', /\b(uber|taxi|corrida de app)\b/],
-    ['alimentacao', /\b(mercado|supermercado|restaurante|almoco|jantar|cafe da manha|comida)\b/],
-    ['hospedagem', /\b(hotel|hospedagem|hostel|pousada)\b/],
-    ['streaming', /\b(streaming|netflix|spotify|disney|prime video)\b/],
+    ['aluguel', /\b(aluguel|locacao)\b(?=.*\b(apartamento|casa|imovel|moradia|residencial)\b)/],
+    ['aluguel', /\b(aluguel|locacao)\b(?!.*\b(carro|veiculo|auto|van)\b)/],
+    ['transporte_gasolina', /\b(gasolina|combustivel|etanol|diesel|abastecimento)\b/],
+    ['transporte_aluguel_veiculo', /\b(aluguel|locacao|alugado)\b.*\b(carro|veiculo|auto|van)\b|\b(rent a car|locadora de veiculos)\b/],
+    ['transporte_onibus', /\b(onibus|metro|trem|bilhete unico|passagem de onibus)\b/],
+    ['transporte_aviao', /\b(passagem aerea|passagem de aviao|voo|companhia aerea|taxa de embarque)\b/],
+    ['transporte_pedagio', /\b(pedagio|tag de pedagio|sem parar)\b/],
+    ['transporte_multas', /\b(multa de transito|multa veicular)\b/],
+    ['transporte_ipva', /\bipva\b/],
+    ['transporte_manutencao', /\b(revisao do carro|manutencao do carro|oficina|troca de oleo|pneu|conserto do carro)\b/],
+    ['transporte_corrida_app', /\b(uber|99 app|corrida de app|taxi|cabify|indrive)\b/],
+    ['alimentacao', /\b(mercado|supermercado|feira|restaurante|almoco|jantar|cafe da manha|comida|refeicao|padaria|lanchonete|delivery|ifood|lanche)\b/],
+    ['hospedagem', /\b(hotel|hospedagem|hostel|pousada|airbnb|diaria|resort|alojamento)\b/],
+    ['viagens', /\b(viagem|pacote de viagem|agencia de viagem|excursao|cruzeiro|roteiro de viagem)\b/],
+    ['streaming', /\b(streaming|netflix|spotify|disney plus|disney|prime video|amazon prime|max|hbo|youtube premium|apple tv)\b/],
+    ['fitness', /\b(academia|mensalidade da academia|fitness|personal trainer|pilates|crossfit|yoga|aula de ginastica)\b/],
+    ['fatura_cartao', /\b(fatura do cartao|fatura de cartao|cartao de credito|pagamento da fatura)\b/],
+    ['acerto_outros_grupos', /\b(acerto|reembolso|pagamento)\b.*\b(outro grupo|outros grupos|grupo [a-z0-9]+)\b|\b(outro grupo|outros grupos)\b.*\b(acerto|reembolso|pagamento)\b/],
+    ['corrida', /\b(corrida de rua|prova de corrida|maratona|meia maratona|inscricao corrida|corrida beneficente)\b/],
+    ['atividades', /\b(ingresso|cinema|teatro|museu|passeio|parque de diversoes|show|atividade|lazer|boliche|evento)\b/],
+    ['transporte', /\b(estacionamento|deslocamento|transporte publico|transporte escolar)\b/],
+    ['alimentacao', /\b(alimentacao|grocery|food)\b/],
+    ['outros', /\b(outros|diversos|despesa sem categoria)\b/],
   ]
-  return rules.find(([, pattern]) => pattern.test(normalized))?.[0] ?? null
+  const matches = new Set(rules.filter(([, pattern]) => pattern.test(normalized)).map(([category]) => category))
+  return matches.size === 1 ? [...matches][0] : null
 }
 
 export function calculateBalances(expenses: ExpenseRecord[], memberIds: string[], month?: string, settlements: SettlementRecord[] = []): GroupBalance[] {
@@ -156,7 +171,9 @@ export function suggestSettlements(balances: GroupBalance[]): SettlementSuggesti
 }
 
 export function parseBrlCents(value: string) {
-  const normalized = value.trim().replace(',', '.')
+  const trimmed = value.trim()
+  const hasBrazilianThousands = /^\d{1,3}(?:\.\d{3})+(?:,\d{1,2})?$/.test(trimmed)
+  const normalized = hasBrazilianThousands ? trimmed.replace(/\./g, '').replace(',', '.') : trimmed.replace(',', '.')
   if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) throw new Error('Informe um valor positivo com até duas casas decimais.')
   const [whole, fraction = ''] = normalized.split('.')
   const cents = Number(whole) * 100 + Number(fraction.padEnd(2, '0'))

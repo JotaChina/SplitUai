@@ -1,6 +1,48 @@
 # SplitUai
 
+## Avisos e Web Push
+
+A central de avisos e o Web Push estão descritos em [docs/web-push.md](docs/web-push.md), incluindo o caminho GitHub Pages `/SplitUai/`, secrets VAPID, Database Webhook, expiração de convites e limitações de navegadores/iOS. As migrations e funções de autenticação, amizades e notificações foram aplicadas/publicadas no Supabase de produção em 2026-10-28. Para ativar entregas Web Push, ainda é necessário configurar as chaves VAPID e o Database Webhook de produção.
+
 Aplicação web para organizar despesas compartilhadas em grupos pequenos.
+
+### Sugestões de categoria pelo texto
+
+Ao criar uma despesa, o título é normalizado sem acentos e sem distinção de maiúsculas, e comparado com palavras e expressões reconhecíveis em português. Só há sugestão quando as regras identificam exatamente uma categoria. Se o texto combinar categorias (por exemplo, “hotel e passagem aérea”), ou for genérico (“compra”, “conta”, “cartão”, “transporte” sem detalhe), o app não sugere categoria. Uma descrição sem correspondência deixa o seletor em **Outros** como valor inicial, sem apresentar isso como sugestão. A categoria permanece editável. Uma escolha manual ou categoria carregada de favorito fica preservada enquanto o título muda; sem escolha manual, uma sugestão antiga é limpa quando o texto deixa de corresponder.
+
+Exemplos cobertos (descrição → categoria):
+
+| Descrição | Categoria |
+| --- | --- |
+| diária da pousada | Hospedagem |
+| almoço no restaurante | Alimentação |
+| estacionamento do carro | Transporte |
+| Uber até o aeroporto | Corrida de app |
+| inscrição na maratona | Corrida |
+| ingresso do cinema | Atividades |
+| taxa de internet | Internet (Contas da Casa) |
+| conta de água | Água (Contas da Casa) |
+| conta de luz | Luz (Contas da Casa) |
+| aluguel do apartamento | Aluguel (Contas da Casa) |
+| IPTU da casa | IPTU (Contas da Casa) |
+| pacote de viagem | Viagens |
+| mensalidade Netflix | Streaming |
+| mensalidade da academia | Fitness |
+| fatura do cartão de crédito | Fatura de cartão |
+| acerto do outro grupo | Acerto de outros grupos |
+| abastecimento gasolina | Gasolina |
+| aluguel de carro | Aluguel de veículo |
+| passagem de ônibus | Ônibus |
+| passagem aérea | Avião |
+| pedágio da rodovia | Pedágio |
+| multa de trânsito | Multas |
+| IPVA do carro | IPVA |
+| revisão do carro na oficina | Manutenção |
+| outros gastos | Outros |
+
+Os termos gerais “transporte”, “corrida”, “cartão” e “acerto” não bastam para escolher entre categorias próximas. Se duas categorias específicas aparecerem no mesmo título, a sugestão também é omitida. As categorias são as opções já definidas no seletor; as categorias agrupadas **Contas da Casa** e **Transporte** são filtros/agrupamentos, não novas categorias. A categoria antiga `transporte` continua disponível para histórico, sem migração ou reclassificação automática.
+
+No formulário, favoritos de despesa deste grupo aplicam descrição, categoria e demais campos da despesa; ao carregar categoria de favorito, ela é tratada como escolha fixa até a pessoa selecionar outra categoria. Favoritos de rateio aplicam participantes e configuração da divisão, sem definir a descrição/categoria. Favoritos são compartilhados no grupo, guardam referências aos participantes e não alteram lançamentos anteriores.
 
 ### Release de 2026-10-24 · publicado
 
@@ -29,7 +71,15 @@ npm ci
 npm run dev
 ```
 
-A autenticação por e-mail/senha está implementada e o acesso é somente por convite. Para testar o login localmente, configure `VITE_SUPABASE_URL` e `VITE_SUPABASE_PUBLISHABLE_KEY` em um arquivo `.env.local` (não versionado). `.env.example` mostra os nomes das variáveis. A chave publicável/anon é feita para uso no cliente e depende das políticas RLS; nunca use chave `service_role`/secret no frontend.
+A autenticação por e-mail ou `@usuário` e senha está disponível e o acesso continua somente por convite. Para testar o login localmente, configure `VITE_SUPABASE_URL` e `VITE_SUPABASE_PUBLISHABLE_KEY` em um arquivo `.env.local` (não versionado). `.env.example` mostra os nomes das variáveis. A chave publicável/anon é feita para uso no cliente e depende das políticas RLS; nunca use chave `service_role`/secret no frontend.
+
+### Login por username
+
+`supabase/functions/username-auth` resolve `@usuário` dentro do servidor e só envia a credencial de e-mail internamente ao Supabase Auth. A resposta ao navegador contém somente os tokens de sessão ou uma mensagem genérica. E-mail e username usam a mesma tela e continuam aceitos. A recuperação também aceita ambos e sempre mostra uma confirmação genérica; o link de recuperação é enviado ao e-mail já cadastrado. Perfis antigos sem username continuam entrando com e-mail. A coluna `profiles.username` já é normalizada em minúsculas e protegida por índice único case-insensitive; a migration `20261026000100_login_username_seguro.sql` adiciona apenas a infraestrutura privada de resolução e limites de tentativas.
+
+A função limita tentativas por identificador (8 por janela de 15 minutos) e por IP de origem (40 por janela), guardando somente hashes SHA-256 desses identificadores. Os wrappers PostgREST de resolução/limite são executáveis somente por `service_role`; mantenha `private` fora dos schemas expostos e nunca copie a chave server-side para `VITE_*`. A Edge Function precisa das variáveis server-side usuais do Supabase (`SUPABASE_URL`, chave publicável/anon e `SUPABASE_SERVICE_ROLE_KEY`/secret), normalmente injetadas pelo ambiente Supabase. `verify_jwt = false` é necessário porque o login começa sem sessão; a função valida a chave publicável, origem e limite antes da consulta. Configure no Auth **Redirect URLs** o endereço local usado no teste e mantenha a URL de produção já cadastrada para que links de recuperação cheguem ao app.
+
+Migração e função devem ser iniciadas/validadas num Supabase local isolado antes de qualquer implantação. Esta alteração não autoriza aplicar a migration ao projeto hospedado nem publicar o frontend.
 
 ### Configurar o ambiente local
 
@@ -54,9 +104,21 @@ VITE_SUPABASE_PUBLISHABLE_KEY=cole_a_chave_publicavel_localmente
 
 ### Abrir uma instância de teste local no Windows
 
-Com Docker Desktop aberto e as dependências instaladas (`npm ci`), execute `iniciar-teste-local.bat` na pasta do projeto. O atalho inicia o Supabase local, abre o Vite em `http://127.0.0.1:5173/SplitUai/` e força o app a usar `http://127.0.0.1:54321` com a chave publicável local, mesmo que exista um `.env.local` configurado para outro ambiente. O terminal do Vite fica em uma segunda janela; use `Ctrl+C` nela para parar o servidor. Fechar o app não aplica migrations.
+Com Docker Desktop aberto e as dependências instaladas (`npm ci`), feche janelas antigas do Vite/Supabase e execute `iniciar-teste-local.bat` por duplo clique. O atalho aplica migrations pendentes somente no banco local, garante três contas e inicia o Supabase na interface de loopback, preservando os volumes locais. Ele serve o app por HTTPS em `https://192.168.3.140:5173/SplitUai/` e encaminha as chamadas à API e às Edge Functions localmente. Mantenha abertas as janelas do Vite e das Edge Functions. Para confiar no certificado em outro dispositivo, copie `.local-dev/certs/rootCA.pem` para ele e instale/confie nessa CA; nunca copie `rootCA-key.pem`. As credenciais e URL do `.env.local` são substituídas pelo atalho; a chave pública VAPID local é carregada para habilitar Push.
 
-O atalho não aplica migrations nem importa dados. Na revisão de 2026-10-23, o banco Supabase local estava na migration 004, com 005–009 pendentes; portanto, funcionalidades que dependem dessas mudanças de schema podem não funcionar até que a cadeia seja revisada e aplicada com segurança em uma instância local adequada. A validação de 010/011 foi executada em uma instância descartável separada. O script não executa `db reset`, `db push` nem qualquer comando contra o projeto remoto.
+Contas locais de teste, recriadas se necessário e com senha reposta pelo atalho:
+
+| Usuário | E-mail | Senha |
+| --- | --- | --- |
+| `teste` | `teste@example.test` | `SplitUaiLocalTeste!2026` |
+| `teste2` | `teste2@example.test` | `SplitUaiLocalTeste2!2026` |
+| `teste3` | `teste3@example.test` | `SplitUaiLocalTeste3!2026` |
+
+Para experimentar notificações, ative Push em **Avisos → Ativar neste dispositivo** em cada celular. Use `@teste3` para enviar um pedido de amizade para `@teste` ou `@teste2`; depois, teste um convite sem e-mail para um grupo. O pedido, o convite e a resposta aparecem na central e geram Push nos dispositivos inscritos. No iPhone/iPad, adicione o SplitUai à Tela de Início antes de ativar Push.
+
+Essas credenciais são exclusivas do Supabase local. O atalho valida que a API de provisionamento está em `localhost` antes de usá-las. Se o endereço IP do computador mudar, atualize `SPLITUAI_LAN_IP` em `iniciar-teste-local.bat` e as URLs de redirect/CORS nas configurações locais.
+
+O atalho não executa `db reset` nem `db push`; as migrations pendentes alteram o schema local e a migration 007 pode recategorizar despesas antigas que mencionem corrida por app. Não há operação contra projeto remoto. O certificado raiz `rootCA.pem` é público e pode ser instalado nos dispositivos de teste; a chave privada `rootCA-key.pem` deve permanecer somente no computador do projeto.
 
 Após entrar, grupos, participantes, convites, despesas, saldos e sugestões de acerto usam o Supabase. Qualquer membro pode criar despesas; apenas admins podem editar ou excluir despesas. Saldos são calculados em centavos; sugestões são indicativas e não registram transferências. Acertos pagos registrados reduzem o saldo, enquanto os pendentes aparecem no histórico sem alterá-lo. **Atenção:** o `.env.local` aponta para o projeto remoto `yzxeyqutmvjmrglmpcbb`; qualquer execução local do app com esse arquivo pode gravar nele. Para desenvolvimento sem tocar no remoto, inicie o Supabase local e use URL/chave locais; não use `.env.local` para testes.
 

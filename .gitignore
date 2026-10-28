@@ -4,6 +4,7 @@ dist/
 .env.*
 !.env.example
 *.local
+.local-dev/
 supabase/.temp/
 supabase/.branches/
 .production-backups/

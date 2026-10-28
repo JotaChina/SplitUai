@@ -457,6 +457,9 @@
 :root[data-mode='dark'] .settlement-status-paid { background: #27382a; color: #a9d796; }
 :root[data-mode='dark'] .balance-positive { color: #8dd3ae; }
 :root[data-mode='dark'] .balance-negative { color: #ef9d8c; }
+:root[data-mode='dark'] .pending-breakdown { background: #40351f; color: #eed18e; }
+:root[data-mode='dark'] .pending-breakdown .balance-row { border-color: #625333; }
+:root[data-mode='dark'] .debt-breakdown { border-color: var(--line); }
 
 :root[data-mode='dark'] :is(.auth-message, .auth-error, .form-note) {
   background: #29342a;
@@ -552,6 +555,48 @@
 
 :root[data-mode='dark'][data-accent] .theme-option[aria-pressed='true'] {
   color: var(--accent);
+}
+
+/* Keep expense form and report selects on the same control rhythm. */
+:root[data-accent] :is(.form-wrap select, .report-controls select, .expense-section-content select) {
+  box-sizing: border-box;
+  width: 100%;
+  height: 42px;
+  min-height: 42px;
+  padding: 0 38px 0 12px;
+  border-color: var(--line, #dfe4d8);
+  border-radius: 8px;
+  background-color: var(--surface-raised, #fff);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='m3.5 6 4.5 4 4.5-4' fill='none' stroke='%23636d5f' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.7'/%3E%3C/svg%3E");
+  background-position: right 11px center;
+  background-repeat: no-repeat;
+  background-size: 16px;
+  color: var(--ink, #30372d);
+  font: 500 11px/1.4 'DM Sans', sans-serif;
+  vertical-align: middle;
+}
+
+:root[data-mode='dark'][data-accent] :is(.form-wrap select, .report-controls select, .expense-section-content select) {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 16 16'%3E%3Cpath d='m3.5 6 4.5 4 4.5-4' fill='none' stroke='%23b3bcb0' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.7'/%3E%3C/svg%3E");
+  background-position: right 11px center;
+  background-repeat: no-repeat;
+  background-size: 16px;
+}
+
+:root[data-accent] :is(.form-wrap select, .report-controls select, .expense-section-content select):disabled {
+  cursor: not-allowed;
+  opacity: .62;
+}
+
+:root[data-accent] .report-controls select {
+  width: auto;
+}
+
+@media (max-width: 700px) {
+  :root[data-accent] .report-controls select {
+    width: 100%;
+    min-width: 0;
+  }
 }
 
 .appearance-card {

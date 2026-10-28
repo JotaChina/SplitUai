@@ -44,7 +44,8 @@ export type GroupProfileRecord = {
 
 export type GroupInvitationRecord = {
   id: string
-  invited_email: string
+  invited_email: string | null
+  invited_user_id?: string | null
   status: 'pending' | 'sent' | 'accepted' | 'cancelled' | 'expired'
   created_at: string
   expires_at: string
@@ -192,7 +193,7 @@ export async function deleteEmptyGroup(client: SupabaseClient, groupId: string) 
 export async function listGroupInvitations(client: SupabaseClient, groupId: string) {
   const { data, error } = await client
     .from('group_invitations')
-    .select('id, invited_email, status, created_at, expires_at')
+    .select('id, invited_email, invited_user_id, status, created_at, expires_at')
     .eq('group_id', groupId)
     .order('created_at', { ascending: false })
 
@@ -210,6 +211,12 @@ export async function createGroupInvitation(
   const { data: invite, error: readError } = await client.from('group_invitations').select('id, invited_email, status, created_at, expires_at').eq('id', data).single()
   if (readError) throw readError
   return invite as GroupInvitationRecord
+}
+
+export async function createGroupInvitationForFriend(client: SupabaseClient, groupId: string, friendId: string) {
+  const { data, error } = await client.rpc('create_group_invitation_for_friend', { p_group_id: groupId, p_friend_id: friendId })
+  if (error) throw error
+  return data as string
 }
 
 export async function manageGroupInvitation(client: SupabaseClient, groupId: string, invitationId: string, action: 'cancel') {
@@ -269,5 +276,10 @@ export async function listMyGroupInvitations(client: SupabaseClient) {
 
 export async function acceptGroupInvitation(client: SupabaseClient, invitationId: string) {
   const { error } = await client.rpc('accept_group_invitation', { p_invitation_id: invitationId })
+  if (error) throw error
+}
+
+export async function declineGroupInvitation(client: SupabaseClient, invitationId: string) {
+  const { error } = await client.rpc('decline_group_invitation', { p_invitation_id: invitationId })
   if (error) throw error
 }

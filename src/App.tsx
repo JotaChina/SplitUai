@@ -4,12 +4,14 @@ import { supabase } from './lib/supabase'
 import {
   createGroup,
   createGroupInvitation,
+  createGroupInvitationForFriend,
   manageGroupInvitation,
   sendGroupInvitationEmail,
   updateGroupMember,
   removeGroupMember,
   listMyGroupInvitations,
   acceptGroupInvitation,
+  declineGroupInvitation,
   deleteEmptyGroup,
   getGroupMembers,
   listGroupInvitations,
@@ -52,8 +54,13 @@ import {
   suggestExpenseCategory,
 } from './lib/expenses'
 import { parseSplitwiseCsv, type SplitwiseCsvPreview } from './lib/splitwiseCsv'
+import { listMyFriendships, manageFriendship, searchFriendByUsername, type FriendSearchResult, type FriendshipView } from './lib/friendships'
 
-type Page = 'groups' | 'group' | 'new-group' | 'expense' | 'account' | 'invitations' | 'profile'
+type Page = 'groups' | 'group' | 'new-group' | 'expense' | 'account' | 'invitations' | 'profile' | 'friends' | 'notifications'
+type InstallPromptEvent = Event & {
+  prompt: () => Promise<void>
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
+}
 type ColorTheme = 'green' | 'red' | 'pink'
 type ChartCategory = ExpenseCategory | 'contas_da_casa' | 'transporte_grupo'
 type GroupImageFocus = { x: number; y: number }
@@ -181,15 +188,18 @@ function App() {
   const [checkingSession, setCheckingSession] = useState(Boolean(supabase))
   const [authError, setAuthError] = useState<string | null>(null)
   const [authBusy, setAuthBusy] = useState(false)
-  const [invitePasswordSetup, setInvitePasswordSetup] = useState(false)
+  const [passwordSetupMode, setPasswordSetupMode] = useState<'invite' | 'recovery' | null>(null)
   const [groups, setGroups] = useState<GroupRecord[]>([])
   const [groupsLoading, setGroupsLoading] = useState(false)
   const [groupsError, setGroupsError] = useState<string | null>(null)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
+  const [targetNotificationRecordId, setTargetNotificationRecordId] = useState<string | null>(null)
   const [profileUserId, setProfileUserId] = useState<string | null>(null)
   const [editingExpense, setEditingExpense] = useState<ExpenseRecord | null>(null)
   const [myInvitations, setMyInvitations] = useState<MyGroupInvitation[]>([])
   const [accountProfile, setAccountProfile] = useState<GroupProfileRecord | null>(null)
+  const [unreadNotifications, setUnreadNotifications] = useState(0)
+  const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null)
   const hadSession = useRef(false)
 
   useEffect(() => {
@@ -216,13 +226,16 @@ function App() {
     if (!supabase) return
 
     let mounted = true
-    const inviteLink = new URLSearchParams(window.location.hash.slice(1)).get('type') === 'invite'
+    const authLinkType = new URLSearchParams(window.location.hash.slice(1)).get('type')
+    const inviteLink = authLinkType === 'invite'
+    const recoveryLink = authLinkType === 'recovery'
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
       if (event === 'SIGNED_OUT' && hadSession.current) setAuthError('Sua sessão foi encerrada. Entre novamente para continuar.')
       hadSession.current = Boolean(nextSession)
       setSession(nextSession)
       setCheckingSession(false)
-      if (inviteLink && nextSession) setInvitePasswordSetup(true)
+      if (event === 'PASSWORD_RECOVERY' && nextSession) setPasswordSetupMode('recovery')
+      else if (inviteLink && nextSession) setPasswordSetupMode('invite')
     })
 
     void supabase.auth.getSession().then(({ data, error }) => {
@@ -231,7 +244,8 @@ function App() {
       hadSession.current = Boolean(data.session)
       setCheckingSession(false)
       if (error) setAuthError(error.message)
-      if (inviteLink && data.session) setInvitePasswordSetup(true)
+      if (recoveryLink && data.session) setPasswordSetupMode('recovery')
+      else if (inviteLink && data.session) setPasswordSetupMode('invite')
     })
 
     return () => {
@@ -251,8 +265,59 @@ function App() {
     void refreshGroups()
     if (supabase) void listMyGroupInvitations(supabase).then((invitations) => {
       setMyInvitations(invitations)
-      if (invitations.length > 0) setPage('invitations')
+      const hasNotificationDestination = new URLSearchParams(window.location.search).has('group') || new URLSearchParams(window.location.search).has('tab')
+      if (invitations.length > 0 && !hasNotificationDestination) setPage('invitations')
     }).catch(() => setMyInvitations([]))
+  }, [session?.user.id])
+
+  useEffect(() => {
+    if (!session) return
+    const targetGroup = new URLSearchParams(window.location.search).get('group')
+    const targetTab = new URLSearchParams(window.location.search).get('tab')
+    setTargetNotificationRecordId(new URLSearchParams(window.location.search).get('expense') ?? new URLSearchParams(window.location.search).get('settlement'))
+    if (targetGroup) {
+      setSelectedGroupId(targetGroup)
+      setPage('group')
+    } else if (targetTab === 'invitations') setPage('invitations')
+    else if (targetTab === 'friends') setPage('friends')
+  }, [session?.user.id])
+
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return
+    void navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`, { scope: import.meta.env.BASE_URL }).catch((error) => console.warn('Service worker indisponível', error))
+  }, [])
+
+  useEffect(() => {
+    const onBeforeInstallPrompt = (event: Event) => {
+      event.preventDefault()
+      setInstallPrompt(event as InstallPromptEvent)
+    }
+    const onAppInstalled = () => setInstallPrompt(null)
+    window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt)
+    window.addEventListener('appinstalled', onAppInstalled)
+    return () => {
+      window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt)
+      window.removeEventListener('appinstalled', onAppInstalled)
+    }
+  }, [])
+
+  async function installApp() {
+    if (!installPrompt) return
+    await installPrompt.prompt()
+    await installPrompt.userChoice
+    setInstallPrompt(null)
+  }
+
+  useEffect(() => {
+    if (!supabase || !session) { setUnreadNotifications(0); return }
+    let active = true
+    const refresh = async () => {
+      const { count } = await supabase!.from('notifications').select('id', { count: 'exact', head: true }).is('read_at', null)
+      if (active) setUnreadNotifications(count ?? 0)
+    }
+    void refresh()
+    const channel = supabase.channel(`notifications:${session.user.id}`).on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${session.user.id}` }, () => void refresh()).subscribe()
+    return () => { active = false; void supabase!.removeChannel(channel) }
   }, [session?.user.id])
 
   async function refreshMyInvitations() {
@@ -266,12 +331,35 @@ function App() {
     await refreshGroups()
   }
 
-  async function signIn(email: string, password: string) {
+  async function declineMyInvitation(id: string) {
+    if (!supabase) throw new Error('Autenticação não configurada.')
+    await declineGroupInvitation(supabase, id)
+    await refreshMyInvitations()
+  }
+
+  async function signIn(identifier: string, password: string) {
     if (!supabase) return
     setAuthBusy(true)
     setAuthError(null)
-    const { error } = await supabase.auth.signInWithPassword({ email, password })
-    if (error) setAuthError(error.message)
+    const { data, error } = await supabase.functions.invoke('username-auth', {
+      body: { action: 'sign_in', identifier, password },
+    })
+    if (error || !data?.session) setAuthError('Não foi possível entrar. Confira seus dados ou tente novamente mais tarde.')
+    else {
+      const { error: sessionError } = await supabase.auth.setSession(data.session)
+      if (sessionError) setAuthError('Não foi possível entrar. Confira seus dados ou tente novamente mais tarde.')
+    }
+    setAuthBusy(false)
+  }
+
+  async function recoverPassword(identifier: string) {
+    if (!supabase) return
+    setAuthBusy(true)
+    setAuthError(null)
+    const { error } = await supabase.functions.invoke('username-auth', {
+      body: { action: 'recover', identifier, redirect_to: window.location.origin + window.location.pathname },
+    })
+    setAuthError(error ? 'Não foi possível processar a solicitação. Tente novamente mais tarde.' : 'Se a conta puder ser recuperada, você receberá instruções no e-mail cadastrado.')
     setAuthBusy(false)
   }
 
@@ -280,7 +368,7 @@ function App() {
     setAuthBusy(true)
     const { error } = await supabase.auth.signOut()
     setAuthError(error?.message ?? null)
-    setInvitePasswordSetup(false)
+    setPasswordSetupMode(null)
     setAuthBusy(false)
   }
 
@@ -292,7 +380,7 @@ function App() {
     if (error) {
       setAuthError(error.message)
     } else {
-      setInvitePasswordSetup(false)
+      setPasswordSetupMode(null)
       window.history.replaceState({}, document.title, `${window.location.pathname}${window.location.search}`)
     }
     setAuthBusy(false)
@@ -311,12 +399,12 @@ function App() {
     return <main className="auth-loading" aria-live="polite">Carregando sua sessão…</main>
   }
 
-  if (invitePasswordSetup && session) {
-    return <PasswordSetup onSubmit={setInvitedUserPassword} onSignOut={signOut} busy={authBusy} error={authError} />
+  if (passwordSetupMode && session) {
+    return <PasswordSetup mode={passwordSetupMode} onSubmit={setInvitedUserPassword} onSignOut={signOut} busy={authBusy} error={authError} />
   }
 
   if (!session) {
-    return <Login configured={Boolean(supabase)} onSignIn={signIn} busy={authBusy} error={authError} />
+    return <Login configured={Boolean(supabase)} onSignIn={signIn} onRecover={recoverPassword} busy={authBusy} error={authError} />
   }
 
   const accountEmail = session.user.email || 'Conta autenticada'
@@ -340,6 +428,12 @@ function App() {
           <button aria-current={page === 'invitations' ? 'page' : undefined} className={page === 'invitations' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('invitations')}>
             <span className="nav-icon" aria-hidden="true">✉</span> Convites recebidos{myInvitations.length > 0 ? ` · ${myInvitations.length}` : ''}
           </button>
+          <button aria-current={page === 'notifications' ? 'page' : undefined} className={page === 'notifications' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('notifications')}>
+            <span className="nav-icon" aria-hidden="true">♢</span> Avisos{unreadNotifications > 0 ? ` · ${unreadNotifications}` : ''}
+          </button>
+          <button aria-current={page === 'friends' ? 'page' : undefined} className={page === 'friends' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('friends')}>
+            <span className="nav-icon" aria-hidden="true">♡</span> Amizades
+          </button>
         </nav>
         <div className="sidebar-bottom">
           <div className="help-card"><svg className="help-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 2.5 22 21H2L12 2.5Z" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinejoin="round"/><path d="M8 16.5h8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg><strong>Dividir fica leve.</strong><p>Organize os gastos e aproveite o que importa.</p></div>
@@ -348,16 +442,18 @@ function App() {
       </aside>
 
       <main className="main-content">
-        <header className="topbar"><a className="mobile-brand" href="#inicio" onClick={(event) => { event.preventDefault(); setPage('groups') }} aria-label="SplitUai — início"><img className="brand-logo" src={brandLogoUrl} alt="" /><span className="brand-name">Split<span>Uai</span></span></a><div className="breadcrumb"><strong>{page === 'account' ? 'Minha conta' : page === 'expense' ? 'Nova despesa' : page === 'profile' ? 'Perfil' : page === 'group' ? groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo' : page === 'new-group' ? 'Novo grupo' : 'Meus grupos'}</strong></div><div className="topbar-account"><button className="sign-out-button" onClick={() => void signOut()} disabled={authBusy}>Sair</button></div></header>
+      <header className="topbar"><a className="mobile-brand" href="#inicio" onClick={(event) => { event.preventDefault(); setPage('groups') }} aria-label="SplitUai — início"><img className="brand-logo" src={brandLogoUrl} alt="" /><span className="brand-name">Split<span>Uai</span></span></a><div className="breadcrumb"><strong>{page === 'account' ? 'Minha conta' : page === 'expense' ? 'Nova despesa' : page === 'profile' ? 'Perfil' : page === 'friends' ? 'Amizades' : page === 'invitations' ? 'Convites recebidos' : page === 'notifications' ? 'Avisos' : page === 'group' ? groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo' : page === 'new-group' ? 'Novo grupo' : 'Meus grupos'}</strong></div><div className="topbar-account">{installPrompt && <button className="install-app-button" type="button" onClick={() => void installApp()}>Instalar app</button>}<button className="sign-out-button" onClick={() => void signOut()} disabled={authBusy}>Sair</button></div></header>
 
         {page === 'groups' && <Groups groups={groups} loading={groupsLoading} error={groupsError} onRefresh={() => void refreshGroups()} onOpen={(id) => { setSelectedGroupId(id); setPage('group') }} onCreate={() => setPage('new-group')} />}
         {page === 'new-group' && <NewGroup onBack={() => setPage('groups')} onCreate={saveNewGroup} />}
-        {page === 'group' && selectedGroupId && supabase && <Group key={selectedGroupId} client={supabase} groupId={selectedGroupId} userId={session.user.id} onBack={() => { void refreshGroups(); setPage('groups') }} onAddExpense={() => { setEditingExpense(null); setPage('expense') }} onEditExpense={(expense) => { setEditingExpense(expense); setPage('expense') }} onOpenProfile={(id) => { setProfileUserId(id); setPage('profile') }} />}
+        {page === 'group' && selectedGroupId && supabase && <Group key={selectedGroupId} client={supabase} groupId={selectedGroupId} targetRecordId={targetNotificationRecordId} userId={session.user.id} onBack={() => { void refreshGroups(); setPage('groups') }} onAddExpense={() => { setEditingExpense(null); setPage('expense') }} onEditExpense={(expense) => { setEditingExpense(expense); setPage('expense') }} onOpenProfile={(id) => { setProfileUserId(id); setPage('profile') }} />}
         {page === 'group' && !selectedGroupId && <Groups groups={groups} loading={groupsLoading} error={groupsError} onRefresh={() => void refreshGroups()} onOpen={(id) => { setSelectedGroupId(id); setPage('group') }} onCreate={() => setPage('new-group')} />}
         {page === 'expense' && selectedGroupId && supabase && <Expense client={supabase} groupId={selectedGroupId} groupName={groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo'} userId={session.user.id} expense={editingExpense} onBack={() => { setEditingExpense(null); setPage('group') }} onSaved={() => { setEditingExpense(null); setPage('group') }} />}
         {page === 'account' && supabase && <Account client={supabase} email={session.user.email ?? ''} userId={session.user.id} onProfileChange={setAccountProfile} onSignOut={signOut} busy={authBusy} colorTheme={colorTheme} onColorThemeChange={setColorTheme} darkMode={darkMode} onDarkModeChange={setDarkMode} />}
         {page === 'profile' && supabase && profileUserId && <UserProfile client={supabase} userId={profileUserId} viewerId={session.user.id} onBack={() => setPage(selectedGroupId ? 'group' : 'groups')} onOpenGroup={(id) => { setSelectedGroupId(id); setPage('group') }} />}
-        {page === 'invitations' && <MyInvitations invitations={myInvitations} onRefresh={() => void refreshMyInvitations()} onAccept={acceptMyInvitation} />}
+        {page === 'invitations' && <MyInvitations invitations={myInvitations} onRefresh={() => void refreshMyInvitations()} onAccept={acceptMyInvitation} onDecline={declineMyInvitation} />}
+        {page === 'friends' && supabase && <Friends client={supabase} userId={session.user.id} />}
+        {page === 'notifications' && supabase && <NotificationCenter client={supabase} userId={session.user.id} onOpenGroup={(id, recordId) => { setTargetNotificationRecordId(recordId ?? null); setSelectedGroupId(id); setPage('group') }} />}
       </main>
     </div>
   )
@@ -408,10 +504,12 @@ function NewGroup({ onBack, onCreate }: { onBack: () => void; onCreate: (values:
   return <section className="page-wrap form-wrap"><button className="back-link" onClick={onBack}>← Voltar aos grupos</button><div className="eyebrow">NOVO ESPAÇO COMPARTILHADO</div><h1>Criar grupo<span className="heading-dot">.</span></h1><p className="form-intro">Você será o administrador inicial do grupo.</p><form onSubmit={(event) => void submit(event)}><label>Nome do grupo<input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} required placeholder="Ex.: Fim de semana em Floripa" disabled={busy} /></label><label>Descrição (opcional)<textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1000} rows={4} placeholder="Um pouco sobre este grupo" disabled={busy} /></label>{error && <p className="auth-error" role="alert">{error}</p>}<div className="form-actions"><button type="button" className="button button-light" onClick={onBack} disabled={busy}>Cancelar</button><button type="submit" className="button button-dark" disabled={busy || !name.trim()}>{busy ? 'Criando…' : 'Criar grupo'} <span>→</span></button></div></form></section>
 }
 
-function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense, onOpenProfile }: { client: NonNullable<typeof supabase>; groupId: string; userId: string; onBack: () => void; onAddExpense: () => void; onEditExpense: (expense: ExpenseRecord) => void; onOpenProfile: (id: string) => void }) {
+function Group({ client, groupId, targetRecordId, userId, onBack, onAddExpense, onEditExpense, onOpenProfile }: { client: NonNullable<typeof supabase>; groupId: string; targetRecordId?: string | null; userId: string; onBack: () => void; onAddExpense: () => void; onEditExpense: (expense: ExpenseRecord) => void; onOpenProfile: (id: string) => void }) {
   const [group, setGroup] = useState<GroupRecord | null>(null)
   const [members, setMembers] = useState<GroupMemberView[]>([])
   const [invitations, setInvitations] = useState<GroupInvitationRecord[]>([])
+  const [friendsToInvite, setFriendsToInvite] = useState<FriendshipView[]>([])
+  const [selectedFriendToInvite, setSelectedFriendToInvite] = useState('')
   const [groupExpenses, setGroupExpenses] = useState<ExpenseRecord[]>([])
   const [groupSettlements, setGroupSettlements] = useState<SettlementRecord[]>([])
   const [loading, setLoading] = useState(true)
@@ -453,6 +551,8 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense, o
   const settlements = suggestSettlements(allBalances)
   const monthDebtTotal = Math.abs(monthBalances.filter((row) => row.balance_cents < 0).reduce((sum, row) => sum + row.balance_cents, 0))
   const allTimeDebtTotal = Math.abs(allBalances.filter((row) => row.balance_cents < 0).reduce((sum, row) => sum + row.balance_cents, 0))
+  const allTimeDebtors = allBalances.filter((row) => row.balance_cents < 0)
+  const hasOutstandingDebt = allTimeDebtors.length > 0
   const currentUserBalanceOutsideMonth = (allBalances.find((row) => row.user_id === userId)?.balance_cents ?? 0)
     - (monthBalances.find((row) => row.user_id === userId)?.balance_cents ?? 0)
   const weekBounds = reportPeriod === 'week' ? isoWeekBounds(reportWeek) : null
@@ -499,6 +599,9 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense, o
           listGroupExpenses(client, groupId),
           listGroupSettlements(client, groupId),
         ])
+        const friendData = memberData.some((member) => member.user_id === userId && member.active && member.role === 'admin')
+          ? await listMyFriendships(client)
+          : []
         if (!active) return
         const currentGroup = groupData as GroupRecord
         setGroup(currentGroup)
@@ -506,6 +609,7 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense, o
         setDescription(currentGroup.description ?? '')
         setMembers(memberData)
         setInvitations(inviteData)
+        setFriendsToInvite(friendData.filter((friend) => friend.status === 'accepted' && !memberData.some((member) => member.user_id === friend.other_user_id && member.active)))
         setGroupExpenses(expenseData)
         setGroupSettlements(settlementData)
       } catch (reason) {
@@ -517,6 +621,15 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense, o
     })()
     return () => { active = false }
   }, [client, groupId])
+
+  useEffect(() => {
+    if (!targetRecordId || loading) return
+    const row = document.getElementById(`notification-record-${targetRecordId}`)
+    if (!row) return
+    const details = row.closest('details')
+    if (details) details.open = true
+    row.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [targetRecordId, loading, groupExpenses, groupSettlements])
 
   async function saveDetails(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -553,6 +666,20 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense, o
     } finally {
       setBusy(false)
     }
+  }
+
+  async function inviteFriend() {
+    if (!selectedFriendToInvite) return
+    setBusy(true); setError(null); setNotice(null)
+    try {
+      await createGroupInvitationForFriend(client, groupId, selectedFriendToInvite)
+      setInvitations(await listGroupInvitations(client, groupId))
+      setSelectedFriendToInvite('')
+      setNotice('Convite enviado pela central do SplitUai. A pessoa precisará aceitá-lo para entrar no grupo.')
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : (reason && typeof reason === 'object' && 'message' in reason ? String(reason.message) : 'Não foi possível enviar o convite para essa amizade.'))
+      setInvitations(await listGroupInvitations(client, groupId).catch(() => invitations))
+    } finally { setBusy(false) }
   }
 
   async function invitationAction(invitation: GroupInvitationRecord, action: 'send' | 'cancel') {
@@ -699,6 +826,28 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense, o
   }
   const memberLink = (id: string) => <button className="profile-link" onClick={() => onOpenProfile(id)} title="Abrir perfil">{memberLabel(id)}</button>
   const renderBalances = (rows: typeof allBalances) => <div className="balance-list">{rows.map((balance) => <div className="balance-row" key={balance.user_id}><span>{memberLink(balance.user_id)}</span><strong className={balance.balance_cents > 0 ? 'balance-positive' : balance.balance_cents < 0 ? 'balance-negative' : ''}>{balance.balance_cents > 0 ? 'Recebe ' : balance.balance_cents < 0 ? 'Deve ' : ''}{formatBrlCents(Math.abs(balance.balance_cents))}</strong></div>)}</div>
+  const renderDebtBreakdown = (debtorId: string) => {
+    const expenseContributions = groupExpenses.map((expense) => ({
+      id: expense.id,
+      description: expense.description,
+      date: expense.expense_date,
+      amount: (expense.paid_by === debtorId ? expense.amount_cents - expense.rounding_remainder_cents : 0)
+        - (expense.shares.find((share) => share.user_id === debtorId)?.amount_cents ?? 0),
+      kind: 'Despesa' as const,
+      installments: expense.installments,
+    })).filter((item) => item.amount !== 0)
+    const settlementContributions = groupSettlements.filter((item) => item.status === 'paid' && [item.paid_by, item.received_by].includes(debtorId)).map((item) => ({
+      id: item.id,
+      description: item.description,
+      date: item.settlement_date,
+      amount: (item.paid_by === debtorId ? item.amount_cents : 0) - (item.received_by === debtorId ? item.amount_cents : 0),
+      kind: 'Acerto pago' as const,
+      installments: [],
+    })).filter((item) => item.amount !== 0)
+    const contributions = [...expenseContributions, ...settlementContributions].sort((a, b) => a.date.localeCompare(b.date))
+    const pending = groupSettlements.filter((item) => item.status === 'pending' && [item.paid_by, item.received_by].includes(debtorId))
+    return <details className="debt-breakdown"><summary>Ver composição do saldo de {memberLabel(debtorId)}</summary><p>Saldo calculado = despesas + acertos pagos. Valores verdes aumentaram o crédito; valores vermelhos aumentaram a dívida.</p><div className="settlement-list">{contributions.map((item) => <div className="balance-row debt-contribution" key={`${item.kind}-${item.id}`}><span><strong>{item.description}</strong><small>{item.kind} · {new Date(`${item.date}T12:00:00`).toLocaleDateString('pt-BR')}{item.installments.length > 1 ? ` · ${item.installments.length} parcelas: ${item.installments.map((part) => `${formatBrlCents(part.amount_cents)} (${new Date(`${part.due_date}T12:00:00`).toLocaleDateString('pt-BR')})`).join(', ')}` : ''}</small></span><strong className={item.amount > 0 ? 'balance-positive' : 'balance-negative'}>{item.amount > 0 ? '+' : '−'}{formatBrlCents(Math.abs(item.amount))}</strong></div>)}</div>{pending.length > 0 && <div className="pending-breakdown"><strong>Acertos pendentes · fora do saldo calculado</strong>{pending.map((item) => <div className="balance-row" key={item.id}><span><strong>{item.description}</strong><small>{memberLabel(item.paid_by)} → {memberLabel(item.received_by)} · previsto para {new Date(`${item.settlement_date}T12:00:00`).toLocaleDateString('pt-BR')}</small></span><strong>{formatBrlCents(item.amount_cents)}</strong></div>)}</div>}</details>
+  }
   const installmentStatus = (dueDate: string) => {
     const now = new Date()
     const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
@@ -709,7 +858,7 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense, o
     const personalShare = expense.shares.find((share) => share.user_id === userId)?.amount_cents
     const personalPaid = expense.paid_by === userId ? expense.amount_cents - expense.rounding_remainder_cents : 0
     const personalNet = personalShare === undefined && expense.paid_by !== userId ? null : personalPaid - (personalShare ?? 0)
-    return <div className="expense-row" key={expense.id}>
+    return <div className="expense-row" id={`notification-record-${expense.id}`} key={expense.id}>
       <span className={`expense-icon category-${expense.category}`}>{categoryEmojis[expense.category]}</span>
       <div className="expense-name">{isAdmin ? <button className="expense-title-button" onClick={() => onEditExpense(expense)}>{expense.description}</button> : <strong>{expense.description}</strong>}<small>{memberLink(expense.paid_by)} pagou · {categoryLabels[expense.category]} · {expense.installments.length}x · {schedule}</small></div>
       <span className="expense-personal-position">{personalNet === null ? <small>Sem parte individual</small> : personalNet > 0 ? <strong className="balance-positive">A receber {formatBrlCents(personalNet)}</strong> : personalNet < 0 ? <strong className="balance-negative">A pagar {formatBrlCents(Math.abs(personalNet))}</strong> : <strong className="expense-settled">Parte individual quitada</strong>}<small>Total da despesa · {formatBrlCents(expense.amount_cents)}</small></span>
@@ -719,15 +868,15 @@ function Group({ client, groupId, userId, onBack, onAddExpense, onEditExpense, o
   }
   return <section className="page-wrap" aria-busy={busy}><button className="back-link" onClick={onBack}>← Voltar aos grupos</button><div className="detail-hero" style={group.cover_url ? { backgroundImage: `linear-gradient(90deg,rgba(18,28,17,.78),rgba(18,28,17,.2)),url("${group.cover_url}")`, backgroundSize: 'cover', backgroundPosition: 'center' } : undefined}><div><div className="eyebrow">{group.archived_at ? 'GRUPO ARQUIVADO' : 'GRUPO'} · CRIADO EM {new Date(group.created_at).toLocaleDateString('pt-BR')}</div>{editing ? <form className="group-edit-form" onSubmit={(event) => void saveDetails(event)}><label>Nome<input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} required /></label><label>Descrição<textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1000} rows={2} /></label><div className="group-image-fields"><GroupImageField label="Foto do ícone" file={iconFile} onChange={setIconFile} shape="icon" focus={iconFocus} onFocusChange={setIconFocus} /><GroupImageField label="Foto de capa" file={coverFile} onChange={setCoverFile} shape="cover" focus={coverFocus} onFocusChange={setCoverFocus} /></div><small>Ajuste o enquadramento na prévia antes de salvar. JPG, PNG ou WebP · até 5 MB por imagem.</small><div className="form-actions"><button type="button" className="button button-light" onClick={() => { setName(group.name); setDescription(group.description ?? ''); setIconFile(null); setCoverFile(null); setEditing(false) }}>Cancelar</button><button className="button button-dark" disabled={busy}>{busy ? 'Salvando…' : 'Salvar'}</button></div></form> : <><div className="group-hero-title">{group.icon_url && <img className="group-icon-large" src={group.icon_url} alt="" />}<h1>{group.name}<span className="heading-dot">.</span></h1></div><p>{group.description || 'Organize as despesas com seus participantes.'}</p>{isAdmin && <button className="text-button" onClick={() => setEditing(true)}>Editar informações</button>}</>}<div className="detail-people"><span>{members.length} {members.length === 1 ? 'participante' : 'participantes'} · Seu papel: {isAdmin ? 'admin' : 'membro'}</span></div><div className="heading-actions">{isAdmin && <button className="button button-light" aria-pressed={adminView} onClick={() => setAdminView((value) => !value)}>{adminView ? 'Visão comum' : 'Visão de admin'}</button>}<button className="button button-light" onClick={() => void archiveGroup()} disabled={busy}>{group.archived_at ? 'Restaurar grupo' : 'Arquivar grupo'}</button>{canDeleteGroup && <button className="button button-light" onClick={() => void permanentlyDeleteGroup()} disabled={busy}>Excluir grupo</button>}</div>{groupExpenses.length > 0 && <small>Grupos com despesas podem ser arquivados; o histórico não pode ser apagado.</small>}</div>{!group.cover_url && <div className="detail-illustration">✳</div>}</div>{error && <p className="auth-error" role="alert">{error}</p>}
     <details className="group-collapsible" open><summary><span><strong>Participantes</strong><small>{members.length} pessoas · perfis, papéis e acesso</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="member-list">{members.map((member) => <div className="member-row" key={member.user_id}>{member.avatar_url ? <img className="avatar avatar-photo" src={member.avatar_url} alt="" /> : <span className="avatar avatar-you">{(member.username?.[0] ?? member.display_name?.[0] ?? 'P').toUpperCase()}</span>}<button className="member-name-button" onClick={() => onOpenProfile(member.user_id)} title="Abrir perfil">{member.username ? `@${member.username}` : member.display_name || 'Sem identificador'}{!member.active && <small> · Acesso encerrado</small>}</button><span className="role-badge">{member.role === 'admin' ? 'Administrador' : 'Membro'}</span>{isAdmin && member.active && member.user_id !== userId && <><select aria-label={`Papel de ${member.username ?? member.display_name ?? 'participante'}`} value={member.role} disabled={busy} onChange={(event) => void memberRole(member, event.target.value as 'admin' | 'member')}><option value="member">Membro</option><option value="admin">Administrador</option></select><button className="text-button" disabled={busy} onClick={() => void memberRemove(member)}>Remover</button></>}</div>)}</div></details>
-    {isAdmin && <details className="group-collapsible"><summary><span><strong>Convites</strong><small>{invitations.length} convites · enviar e acompanhar acessos</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="invite-panel"><form className="invite-form" onSubmit={(event) => void invite(event)}><label>E-mail da pessoa<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required placeholder="pessoa@email.com" disabled={busy} /></label><button className="button button-dark" disabled={busy}>{busy ? 'Enviando…' : 'Criar e enviar'}</button></form><p className="invite-help">A pessoa receberá um link seguro para entrar. Contas existentes recebem link de acesso; contas novas recebem convite para criar a senha. O aceite do grupo acontece depois que a pessoa entra e confirma o convite.</p>{error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}{invitations.length > 0 && <div className="invitation-list">{invitations.map((invitation) => { const expired = ['pending','sent'].includes(invitation.status) && new Date(invitation.expires_at) <= new Date(); const status = expired ? 'expired' : invitation.status; return <div className="invitation-row" key={invitation.id}><div><strong>{invitation.invited_email}</strong><small>Expira em {new Date(invitation.expires_at).toLocaleDateString('pt-BR')}</small></div><span className={`invite-status status-${status}`}>{status === 'pending' ? 'Pendente' : status === 'sent' ? 'Enviado' : status === 'accepted' ? 'Aceito' : status === 'cancelled' ? 'Cancelado' : 'Expirado'}</span>{isAdmin && ['pending','sent'].includes(invitation.status) && !expired && <><button className="text-button" disabled={busy} onClick={() => void invitationAction(invitation,'send')}>{invitation.status === 'sent' ? 'Reenviar' : 'Enviar'}</button><button className="text-button" disabled={busy} onClick={() => void invitationAction(invitation,'cancel')}>Cancelar</button></>}</div> })}</div>}</div></details>}
+    {isAdmin && <details className="group-collapsible"><summary><span><strong>Convites</strong><small>{invitations.length} convites · enviar e acompanhar acessos</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="invite-panel"><form className="invite-form" onSubmit={(event) => void invite(event)}><label>E-mail da pessoa<input type="email" value={email} onChange={(event) => setEmail(event.target.value)} required placeholder="pessoa@email.com" disabled={busy} /></label><button className="button button-dark" disabled={busy}>{busy ? 'Enviando…' : 'Criar e enviar'}</button></form>{friendsToInvite.length > 0 && <div className="friend-invite"><label>Ou convide uma amizade<select value={selectedFriendToInvite} onChange={(event) => setSelectedFriendToInvite(event.target.value)} disabled={busy}><option value="">Selecione uma amizade</option>{friendsToInvite.map((friend) => <option key={friend.other_user_id} value={friend.other_user_id}>{friend.username ? `@${friend.username}` : friend.display_name || 'Pessoa usuária'}</option>)}</select></label><button className="button button-light" disabled={busy || !selectedFriendToInvite} onClick={() => void inviteFriend()}>{busy ? 'Enviando…' : 'Enviar convite'}</button><small>O convite aparece em Convites recebidos e gera um aviso no dispositivo, se o Push estiver ativado. A pessoa ainda precisa aceitar para entrar no grupo.</small></div>}<p className="invite-help">Para contas existentes, use o convite de amizade acima e dispense o e-mail. O campo de e-mail continua disponível para convidar quem ainda não usa o SplitUai.</p>{error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}{invitations.length > 0 && <div className="invitation-list">{invitations.map((invitation) => { const expired = ['pending','sent'].includes(invitation.status) && new Date(invitation.expires_at) <= new Date(); const status = expired ? 'expired' : invitation.status; const friend = friendsToInvite.find((item) => item.other_user_id === invitation.invited_user_id); const recipient = invitation.invited_user_id ? (friend?.username ? `@${friend.username}` : friend?.display_name || 'Amizade') : invitation.invited_email || 'Conta convidada'; return <div className="invitation-row" key={invitation.id}><div><strong>{recipient}</strong><small>Expira em {new Date(invitation.expires_at).toLocaleDateString('pt-BR')}</small></div><span className={`invite-status status-${status}`}>{status === 'pending' ? 'Pendente' : status === 'sent' ? 'Enviado' : status === 'accepted' ? 'Aceito' : status === 'cancelled' ? 'Cancelado' : 'Expirado'}</span>{isAdmin && ['pending','sent'].includes(invitation.status) && !expired && <>{!invitation.invited_user_id && <button className="text-button" disabled={busy} onClick={() => void invitationAction(invitation,'send')}>{invitation.status === 'sent' ? 'Reenviar' : 'Enviar'}</button>}<button className="text-button" disabled={busy} onClick={() => void invitationAction(invitation,'cancel')}>Cancelar</button></>}</div> })}</div>}</div></details>}
     {isAdmin && adminView && <details className="group-collapsible admin-tools"><summary><span><strong>Ferramentas administrativas</strong><small>Importar histórico do Splitwise</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><section className="settlement-panel splitwise-import"><div><div className="eyebrow">VISÃO DE ADMIN</div><h3>Importar histórico do Splitwise</h3><p>Despesas entram como despesas e pagamentos entram como acertos, separados dos gráficos. Reimportar o mesmo arquivo não duplica os registros.</p></div><label>Arquivo CSV<input type="file" accept=".csv,text/csv" disabled={busy} onChange={(event) => void chooseSplitwiseFile(event.target.files?.[0])} /></label>{splitwisePreview && <><strong>{splitwiseFileName}: {splitwisePreview.expenses.length} despesas · {splitwisePreview.settlements.length} acertos · {splitwisePreview.skipped.length} linhas ignoradas</strong><div className="splitwise-mappings">{splitwisePreview.memberNames.map((person) => <label key={person}>{person}<select value={splitwiseMappings[person] ?? ''} onChange={(event) => setSplitwiseMappings((current) => ({ ...current, [person]: event.target.value }))}><option value="">Selecione participante</option>{members.map((member) => <option key={member.user_id} value={member.user_id}>{member.username ? `@${member.username}` : member.display_name || 'Sem identificador'}{!member.active ? ' (acesso encerrado)' : ''}</option>)}</select></label>)}</div>{splitwisePreview.skipped.length > 0 && <details><summary>Ver linhas ignoradas</summary><ul>{splitwisePreview.skipped.map((row) => <li key={row.row}>Linha {row.row} · {row.description}: {row.reason}</li>)}</ul></details>}<div className="form-actions"><button className="button button-light" disabled={busy} onClick={() => setSplitwisePreview(null)}>Cancelar</button><button className="button button-dark" disabled={busy || splitwisePreview.expenses.length + splitwisePreview.settlements.length === 0} onClick={() => void importSplitwise()}>{busy ? 'Importando…' : 'Importar histórico'}</button></div></>}</section></details>}
-    <div className="detail-stats"><div><small>DESPESAS DO GRUPO</small><strong>{groupExpenses.length}</strong></div><div><small>PARTICIPANTES</small><strong>{members.length}</strong></div><div><small>VALOR DEVEDOR TOTAL</small><strong>{formatBrlCents(allTimeDebtTotal)}</strong></div><button className="button button-dark" onClick={onAddExpense}><span>＋</span> Nova despesa</button></div>
-    <details className="group-collapsible" open><summary><span><strong>Saldos em paralelo</strong><small>Saldo do mês e de todo o período</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="balance-columns"><section className="settlement-panel"><h3>Saldo do mês · {new Date(`${currentMonth}-01T12:00:00`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}</h3>{renderBalances(monthBalances)}<strong>Total devedor do mês: {formatBrlCents(monthDebtTotal)}</strong><small className="balance-period-note">{currentUserBalanceOutsideMonth === 0 ? 'Seu saldo dos demais períodos está zerado.' : `Nos demais períodos, ${currentUserBalanceOutsideMonth < 0 ? 'você deve' : 'você recebe'} ${formatBrlCents(Math.abs(currentUserBalanceOutsideMonth))}.`}</small></section><section className="settlement-panel"><h3>Saldo de todo o período</h3>{renderBalances(allBalances)}<strong>Falta acertar: {formatBrlCents(allTimeDebtTotal)}</strong></section></div></details>
+    <div className="detail-stats"><div><small>DESPESAS DO GRUPO</small><strong>{groupExpenses.length}</strong></div><div><small>PARTICIPANTES</small><strong>{members.length}</strong></div>{hasOutstandingDebt && <div><small>VALOR DEVEDOR TOTAL</small><strong className="balance-negative">{formatBrlCents(allTimeDebtTotal)}</strong></div>}<button className="button button-dark" onClick={onAddExpense}><span>＋</span> Nova despesa</button></div>
+    <details className="group-collapsible" open><summary><span><strong>Saldos em paralelo</strong><small>{hasOutstandingDebt ? 'Saldo do mês e resumo de todo o período' : 'Saldo do mês · histórico preservado abaixo'}</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="balance-columns"><section className="settlement-panel"><h3>Saldo do mês · {new Date(`${currentMonth}-01T12:00:00`).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })}</h3>{renderBalances(monthBalances)}<strong className={monthDebtTotal > 0 ? 'balance-negative' : 'balance-positive'}>Total devedor do mês: {formatBrlCents(monthDebtTotal)}</strong><small className="balance-period-note">{currentUserBalanceOutsideMonth === 0 ? 'Seu saldo dos demais períodos está zerado.' : `Nos demais períodos, ${currentUserBalanceOutsideMonth < 0 ? 'você deve' : 'você recebe'} ${formatBrlCents(Math.abs(currentUserBalanceOutsideMonth))}.`}</small></section>{hasOutstandingDebt && <section className="settlement-panel all-time-balance"><h3>Saldo de todo o período · {group.name}</h3><p>Saldo calculado com despesas e acertos pagos. Acertos pendentes aparecem no histórico e não reduzem este valor.</p>{renderBalances(allBalances)}<strong className="balance-negative">Valor devedor total: {formatBrlCents(allTimeDebtTotal)}</strong>{allTimeDebtors.map((debtor) => <div key={debtor.user_id}>{renderDebtBreakdown(debtor.user_id)}</div>)}</section>}</div></details>
     <details className="settlement-panel group-collapsible" open><summary><span><strong>Sugestões e registro de acerto</strong><small>{settlements.length ? `${settlements.length} transferências sugeridas · todo o período` : 'Todos estão em dia'}</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="settlement-panel-content"><div className="settlement-panel-heading"><h3>Acertos do grupo</h3><button className="button button-dark" type="button" onClick={() => { setSettlementFormOpen((open) => !open); setError(null); setSettlementNotice(null) }}>{settlementFormOpen ? 'Cancelar acerto' : '＋ Acertar contas'}</button></div>{settlements.length ? <div className="settlement-list">{settlements.map((item, index) => <div className="balance-row" key={`${item.from_user_id}-${item.to_user_id}-${index}`}><span>{memberLink(item.from_user_id)} paga para {memberLink(item.to_user_id)}</span><strong>{formatBrlCents(item.amount_cents)}</strong></div>)}</div> : <p>Todos estão em dia. Não há transferências sugeridas.</p>}<small>As sugestões mostram valores para quitar o saldo. Você também pode registrar pagamentos parciais.</small>
-      {settlementFormOpen && <form className="settlement-form" onSubmit={(event) => void saveSettlement(event)}><p>Registre um pagamento feito ou combinado por você. Acertos pendentes ficam no histórico e só alteram os saldos depois de confirmados.</p><div className="settlement-form-fields"><label>Quem recebeu?<select required value={settlementRecipient} onChange={(event) => setSettlementRecipient(event.target.value)}><option value="">Escolha uma pessoa</option>{members.filter((member) => member.user_id !== userId).map((member) => <option key={member.user_id} value={member.user_id}>{memberLabel(member.user_id)}{member.active ? '' : ' · sem acesso'}</option>)}</select></label><label>Valor<input required type="text" inputMode="decimal" placeholder="0,00" value={settlementAmount} onChange={(event) => setSettlementAmount(event.target.value)} /></label><label>Forma de pagamento<select value={settlementMethod} onChange={(event) => setSettlementMethod(event.target.value as Exclude<SettlementPaymentMethod, 'splitwise'>)}><option value="pix">Pix</option><option value="dinheiro">Dinheiro</option><option value="transferencia">Transferência bancária</option><option value="cartao">Cartão</option><option value="outro">Outro</option></select></label><label>Status<select value={settlementStatus} onChange={(event) => setSettlementStatus(event.target.value as 'pending' | 'paid')}><option value="paid">Pago</option><option value="pending">Pendente</option></select></label><label>{settlementStatus === 'paid' ? 'Data do pagamento' : 'Data prevista'}<input required type="date" value={settlementDate} onChange={(event) => setSettlementDate(event.target.value)} /></label></div><div className="form-actions"><button type="button" className="button button-light" disabled={busy} onClick={() => setSettlementFormOpen(false)}>Cancelar</button><button type="submit" className="button button-dark" disabled={busy || !settlementRecipient || !settlementAmount.trim()}>{busy ? 'Registrando…' : settlementStatus === 'paid' ? 'Registrar pagamento' : 'Registrar como pendente'}</button></div></form>}
+      {settlementFormOpen && <form className="settlement-form" onSubmit={(event) => void saveSettlement(event)}><p>Registre um pagamento feito ou combinado por você. Acertos pendentes ficam no histórico e só alteram os saldos depois de confirmados.</p><div className="settlement-form-fields"><label>Quem recebeu?<select required value={settlementRecipient} onChange={(event) => setSettlementRecipient(event.target.value)}><option value="">Escolha uma pessoa</option>{members.filter((member) => member.user_id !== userId).map((member) => <option key={member.user_id} value={member.user_id}>{memberLabel(member.user_id)}{member.active ? '' : ' · sem acesso'}</option>)}</select></label><label>Valor<div className="money-input"><span>R$</span><input required type="text" inputMode="decimal" placeholder="0,00" value={settlementAmount} onChange={(event) => setSettlementAmount(formatBrlInput(event.target.value))} /></div></label><label>Forma de pagamento<select value={settlementMethod} onChange={(event) => setSettlementMethod(event.target.value as Exclude<SettlementPaymentMethod, 'splitwise'>)}><option value="pix">Pix</option><option value="dinheiro">Dinheiro</option><option value="transferencia">Transferência bancária</option><option value="cartao">Cartão</option><option value="outro">Outro</option></select></label><label>Status<select value={settlementStatus} onChange={(event) => setSettlementStatus(event.target.value as 'paid' | 'pending')}><option value="paid">Pago</option><option value="pending">Pendente</option></select></label><label>{settlementStatus === 'paid' ? 'Data do pagamento' : 'Data prevista'}<input required type="date" value={settlementDate} onChange={(event) => setSettlementDate(event.target.value)} /></label></div><div className="form-actions"><button type="button" className="button button-light" disabled={busy} onClick={() => setSettlementFormOpen(false)}>Cancelar</button><button type="submit" className="button button-dark" disabled={busy || !settlementRecipient || !settlementAmount.trim()}>{busy ? 'Registrando…' : settlementStatus === 'paid' ? 'Registrar pagamento' : 'Registrar como pendente'}</button></div></form>}
       {settlementNotice && <p className="auth-message" role="status">{settlementNotice}</p>}
     </div></details>
-    {groupSettlements.length > 0 && <details className="settlement-panel settlement-history"><summary><span><strong>Histórico de acertos</strong><small>{groupSettlements.filter((item) => item.status === 'pending').length} pendentes · {groupSettlements.filter((item) => item.status === 'paid').length} pagos</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="settlement-list">{groupSettlements.map((item) => { const paidByUser = item.paid_by === userId; const receivedByUser = item.received_by === userId; const pending = item.status === 'pending'; const canConfirm = pending && (paidByUser || isAdmin); return <div className={`balance-row settlement-row${pending ? ' settlement-pending' : paidByUser ? ' settlement-paid' : receivedByUser ? ' settlement-received' : ''}`} key={item.id}><span><strong>{paidByUser ? <>Você {pending ? 'combinou pagar' : 'pagou'} para {memberLink(item.received_by)}</> : receivedByUser ? <>{memberLink(item.paid_by)} {pending ? 'combinou pagar para você' : 'pagou para você'}</> : <>{memberLink(item.paid_by)} {pending ? 'combinou pagar para' : 'pagou para'} {memberLink(item.received_by)}</>}<em className={`settlement-status settlement-status-${item.status}`}>{pending ? 'Pendente' : 'Pago'}</em></strong><small>{item.description} · {settlementPaymentLabels[item.payment_method] ?? 'Forma não informada'} · {pending ? 'Previsto para' : 'Pago em'} {new Date(`${item.settlement_date}T12:00:00`).toLocaleDateString('pt-BR')}</small></span><strong>{formatBrlCents(item.amount_cents)}</strong>{canConfirm && <button className="button button-light settlement-confirm" disabled={busy} onClick={() => void confirmSettlementPaid(item)} aria-label={`Confirmar pagamento de ${formatBrlCents(item.amount_cents)} para ${memberLabel(item.received_by)}`}>Confirmar pagamento</button>}</div> })}</div><small>Somente acertos pagos reduzem os saldos. Despesas e acertos ficam separados nos relatórios; pendentes permanecem como previsão.</small></details>}
+    {groupSettlements.length > 0 && <details className="settlement-panel settlement-history"><summary><span><strong>Histórico de acertos</strong><small>{groupSettlements.filter((item) => item.status === 'pending').length} pendentes · {groupSettlements.filter((item) => item.status === 'paid').length} pagos</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="settlement-list">{groupSettlements.map((item) => { const paidByUser = item.paid_by === userId; const receivedByUser = item.received_by === userId; const pending = item.status === 'pending'; const canConfirm = pending && (paidByUser || isAdmin); return <div id={`notification-record-${item.id}`} className={`balance-row settlement-row${pending ? ' settlement-pending' : paidByUser ? ' settlement-paid' : receivedByUser ? ' settlement-received' : ''}`} key={item.id}><span><strong>{paidByUser ? <>Você {pending ? 'combinou pagar' : 'pagou'} para {memberLink(item.received_by)}</> : receivedByUser ? <>{memberLink(item.paid_by)} {pending ? 'combinou pagar para você' : 'pagou para você'}</> : <>{memberLink(item.paid_by)} {pending ? 'combinou pagar para' : 'pagou para'} {memberLink(item.received_by)}</>}<em className={`settlement-status settlement-status-${item.status}`}>{pending ? 'Pendente' : 'Pago'}</em></strong><small>{item.description} · {settlementPaymentLabels[item.payment_method] ?? 'Forma não informada'} · {pending ? 'Previsto para' : 'Pago em'} {new Date(`${item.settlement_date}T12:00:00`).toLocaleDateString('pt-BR')}</small></span><strong>{formatBrlCents(item.amount_cents)}</strong>{canConfirm && <button className="button button-light settlement-confirm" disabled={busy} onClick={() => void confirmSettlementPaid(item)} aria-label={`Confirmar pagamento de ${formatBrlCents(item.amount_cents)} para ${memberLabel(item.received_by)}`}>Confirmar pagamento</button>}</div> })}</div><small>Somente acertos pagos reduzem os saldos. Despesas e acertos ficam separados nos relatórios; pendentes permanecem como previsão.</small></details>}
     <details className="group-collapsible report-collapsible" open><summary><span><strong>Relatórios e gráficos</strong><small>Despesas por categoria, período e tendência</small></span><span className="settlement-chevron" aria-hidden="true">⌄</span></summary><div className="report-section-content">
       <div className="chart-switch" role="group" aria-label="Tipo de gráfico"><button aria-pressed={chartType === 'bars'} className={chartType === 'bars' ? 'selected' : ''} onClick={() => setChartType('bars')}>Barras</button><button aria-pressed={chartType === 'donut'} className={chartType === 'donut' ? 'selected' : ''} onClick={() => setChartType('donut')}>Rosca</button><button aria-pressed={chartType === 'trend'} className={chartType === 'trend' ? 'selected' : ''} onClick={() => setChartType('trend')}>Tendência</button></div>
     <div className="report-controls">
@@ -801,7 +950,7 @@ function Expense({ client, groupId, groupName, userId, expense, onBack, onSaved 
   const includesFormerParticipant = Boolean(expense && [expense.paid_by, ...expense.shares.map((share) => share.user_id)].some((id) => members.some((member) => member.user_id === id && !member.active)))
   const [description, setDescription] = useState(expense?.description ?? '')
   const [categoryManuallySelected, setCategoryManuallySelected] = useState(Boolean(expense))
-  const [amount, setAmount] = useState(expense ? `${Math.floor(expense.amount_cents / 100)},${String(expense.amount_cents % 100).padStart(2, '0')}` : '')
+  const [amount, setAmount] = useState(expense ? formatBrlInput(String(expense.amount_cents)) : '')
   const [paidBy, setPaidBy] = useState(expense?.paid_by ?? userId)
   const [category, setCategory] = useState<ExpenseCategory>(expense?.category ?? 'outros')
   const [expenseDate, setExpenseDate] = useState(expense?.expense_date ?? new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10))
@@ -810,7 +959,7 @@ function Expense({ client, groupId, groupName, userId, expense, onBack, onSaved 
   const [participantIds, setParticipantIds] = useState<string[]>(expense?.shares.map((share) => share.user_id) ?? [])
   const [splitMode, setSplitMode] = useState<SplitMode>(expense?.split_mode ?? 'equal')
   const [percentageInputs, setPercentageInputs] = useState<Record<string, string>>(() => Object.fromEntries((expense?.shares ?? []).map((share) => [share.user_id, String(share.percentage ?? (expense?.amount_cents ? share.amount_cents * 100 / expense.amount_cents : 0))])))
-  const [customInputs, setCustomInputs] = useState<Record<string, string>>(() => Object.fromEntries((expense?.shares ?? []).map((share) => [share.user_id, `${Math.floor(share.amount_cents / 100)},${String(share.amount_cents % 100).padStart(2, '0')}`])))
+  const [customInputs, setCustomInputs] = useState<Record<string, string>>(() => Object.fromEntries((expense?.shares ?? []).map((share) => [share.user_id, formatBrlInput(String(share.amount_cents))])))
   const [installmentCount, setInstallmentCount] = useState(String(expense?.installments.length ?? 1))
   const [recurring, setRecurring] = useState(false)
   const [loading, setLoading] = useState(true)
@@ -824,7 +973,7 @@ function Expense({ client, groupId, groupName, userId, expense, onBack, onSaved 
   useEffect(() => {
     if (expense || categoryManuallySelected) return
     const suggestion = suggestExpenseCategory(description)
-    if (suggestion) setCategory(suggestion)
+    setCategory(suggestion ?? 'outros')
   }, [description, expense, categoryManuallySelected])
 
   useEffect(() => {
@@ -910,11 +1059,11 @@ function Expense({ client, groupId, groupName, userId, expense, onBack, onSaved 
     if (typeof t.paid_by === 'string' && activeMembers.some((member) => member.user_id === t.paid_by)) setPaidBy(t.paid_by)
     if (t.split_mode === 'equal' || t.split_mode === 'percentage' || t.split_mode === 'custom') setSplitMode(t.split_mode)
     if (t.percentages && typeof t.percentages === 'object') setPercentageInputs(Object.fromEntries(Object.entries(t.percentages).map(([key, value]) => [key, String(value)])))
-    if (t.custom_cents && typeof t.custom_cents === 'object') setCustomInputs(Object.fromEntries(Object.entries(t.custom_cents).map(([key, value]) => [key, `${Math.floor(Number(value) / 100)},${String(Number(value) % 100).padStart(2, '0')}`])))
+    if (t.custom_cents && typeof t.custom_cents === 'object') setCustomInputs(Object.fromEntries(Object.entries(t.custom_cents).map(([key, value]) => [key, formatBrlInput(String(Number(value)))])))
     if (favorite.kind === 'expense') {
       if (typeof t.description === 'string') setDescription(t.description)
       if (typeof t.category === 'string') { setCategory(t.category as ExpenseCategory); setCategoryManuallySelected(true) }
-      if (typeof t.amount_cents === 'number') setAmount(`${Math.floor(t.amount_cents / 100)},${String(t.amount_cents % 100).padStart(2, '0')}`)
+      if (typeof t.amount_cents === 'number') setAmount(formatBrlInput(String(t.amount_cents)))
       if (typeof t.notes === 'string') setNotes(t.notes)
       setRecurring(t.recurring === true)
       setInstallmentCount(String(t.installment_count ?? 1))
@@ -963,15 +1112,15 @@ function Expense({ client, groupId, groupName, userId, expense, onBack, onSaved 
   const installmentsPreview = parsedAmount && preview && !previewError ? generateMonthlySchedule(parsedAmount, Number(installmentCount), firstDueDate, preview.shares, preview.remainderCents) : []
 
   return <section className="page-wrap form-wrap"><button className="back-link" onClick={onBack}>← Voltar ao grupo</button><div className="eyebrow">{groupName}</div><h1>{expense ? 'Editar despesa' : 'Nova despesa'}<span className="heading-dot">.</span></h1><p className="form-intro">Registre o gasto, escolha como dividir e confira as parcelas antes de salvar.</p>{includesFormerParticipant && <p className="invite-help">Esta despesa inclui participante removido. O registro e as parcelas foram preservados e não podem ser recalculados.</p>}{loading ? <p className="auth-loading">Carregando participantes…</p> : <form onSubmit={(event) => void submit(event)}>
-    {favoriteRows.length > 0 && <label>Usar ou editar favorito deste grupo<select value={selectedFavoriteId} onChange={(event) => applyFavorite(event.target.value)}><option value="">Escolha um favorito</option>{favoriteRows.map((row) => <option key={row.id} value={row.id}>{row.name} · {row.kind === 'split' ? 'rateio' : 'despesa'}</option>)}</select></label>}
+    {favoriteRows.length > 0 && <label>Usar ou editar favorito deste grupo<select value={selectedFavoriteId} onChange={(event) => applyFavorite(event.target.value)}><option value="">Escolha um favorito</option>{favoriteRows.map((row) => <option key={row.id} value={row.id}>{row.name} · {row.kind === 'split' ? 'rateio' : 'despesa'}</option>)}</select><small>Favoritos de despesa preenchem descrição e categoria e preservam essa categoria ao editar o texto. Favoritos de rateio alteram participantes e divisão.</small></label>}
     <label>Descrição<input value={description} onChange={(event) => setDescription(event.target.value)} maxLength={200} required placeholder="Ex.: almoço na praia" disabled={busy} />{!expense && suggestExpenseCategory(description) && !categoryManuallySelected && <small role="status">Categoria sugerida: {categoryLabels[suggestExpenseCategory(description)!]}. Você pode alterar abaixo.</small>}</label>
-    <div className="form-two"><label>Valor total<div className="money-input"><span>R$</span><input value={amount} onChange={(event) => setAmount(event.target.value)} inputMode="decimal" required placeholder="0,00" disabled={busy} /></div></label><label>Quem pagou?<select value={paidBy} onChange={(event) => setPaidBy(event.target.value)} required disabled={busy}><option value="" disabled>Selecione</option>{activeMembers.map((member) => <option key={member.user_id} value={member.user_id}>{memberLabel(member)}{member.user_id === userId ? ' (você)' : ''}</option>)}</select></label></div>
+    <div className="form-two"><label>Valor total<div className="money-input"><span>R$</span><input value={amount} onChange={(event) => setAmount(formatBrlInput(event.target.value))} inputMode="decimal" required placeholder="0,00" disabled={busy} /></div></label><label>Quem pagou?<select value={paidBy} onChange={(event) => setPaidBy(event.target.value)} required disabled={busy}><option value="" disabled>Selecione</option>{activeMembers.map((member) => <option key={member.user_id} value={member.user_id}>{memberLabel(member)}{member.user_id === userId ? ' (você)' : ''}</option>)}</select></label></div>
     <div className="form-two"><label>Categoria<select value={category} onChange={(event) => { setCategory(event.target.value as ExpenseCategory); setCategoryManuallySelected(true) }} disabled={busy}><optgroup label="Categorias principais"><option value="alimentacao">🍴 Alimentação</option><option value="hospedagem">🏡 Hospedagem</option><option value="corrida">🍁 Corrida</option><option value="atividades">🎟️ Atividades</option><option value="outros">✳ Outros</option><option value="viagens">🧳 Viagens</option><option value="streaming">📺 Streaming</option><option value="fitness">🏋️ Fitness</option><option value="fatura_cartao">💳 Fatura de cartão</option><option value="acerto_outros_grupos">↔️ Acerto de outros grupos</option></optgroup><optgroup label="Contas da Casa"><option value="aluguel">🏠 Aluguel</option><option value="luz">💡 Luz</option><option value="agua">💧 Água</option><option value="iptu">🏛️ IPTU</option><option value="internet">🌐 Internet</option></optgroup><optgroup label="Transporte · categorias atuais">{transportCategories.map((key) => <option key={key} value={key}>{categoryEmojis[key]} {categoryLabels[key]}</option>)}</optgroup>{expense?.category === 'transporte' && <optgroup label="Transporte · registro antigo"><option value="transporte">🚗 Transporte (categoria antiga)</option></optgroup>}</select></label><label>Data da despesa<input type="date" value={expenseDate} onChange={(event) => setExpenseDate(event.target.value)} required disabled={busy || Boolean(expense?.recurring_series_id)} /></label></div>
     <label>Forma de divisão<select value={splitMode} onChange={(event) => setSplitMode(event.target.value as SplitMode)} disabled={busy}><option value="equal">Igualmente</option><option value="percentage">Por porcentagem</option><option value="custom">Valores definidos por pessoa</option></select></label>
     <fieldset className="participant-picker"><legend>Participantes</legend>{activeMembers.map((member) => <label key={member.user_id}><input type="checkbox" checked={participantIds.includes(member.user_id)} onChange={(event) => { const ids = event.target.checked ? [...participantIds, member.user_id] : participantIds.filter((id) => id !== member.user_id); setParticipantIds(ids); if (event.target.checked) { const equal = ids.length ? 100 / ids.length : 0; setPercentageInputs((current) => Object.fromEntries(ids.map((id) => [id, current[id] ?? String(equal)]))) } }} disabled={busy} /><span>{memberLabel(member)}{member.user_id === userId ? ' (você)' : ''}</span></label>)}</fieldset>
     {splitMode === 'percentage' && participantIds.map((id) => <label key={id}>{memberLabel(members.find((member) => member.user_id === id)!)} · porcentagem<input type="number" min="0" max="100" step="0.01" value={percentageInputs[id] ?? ''} onChange={(event) => setPercentageInputs((current) => ({ ...current, [id]: event.target.value }))} disabled={busy} /></label>)}
     {splitMode === 'percentage' && <small>Soma informada: {totalPercent.toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%. Deve fechar em 100%.</small>}
-    {splitMode === 'custom' && participantIds.map((id) => <label key={id}>{memberLabel(members.find((member) => member.user_id === id)!)} · valor<div className="money-input"><span>R$</span><input inputMode="decimal" value={customInputs[id] ?? ''} onChange={(event) => setCustomInputs((current) => ({ ...current, [id]: event.target.value }))} disabled={busy} /></div></label>)}
+    {splitMode === 'custom' && participantIds.map((id) => <label key={id}>{memberLabel(members.find((member) => member.user_id === id)!)} · valor<div className="money-input"><span>R$</span><input inputMode="decimal" value={customInputs[id] ?? ''} onChange={(event) => setCustomInputs((current) => ({ ...current, [id]: formatBrlInput(event.target.value) }))} disabled={busy} /></div></label>)}
     {splitMode === 'equal' && <small>Na divisão igual, todos recebem a mesma cota arredondada para baixo; os centavos restantes ficam com quem pagou.</small>}
     {!expense && <label className="recurrence-choice"><input type="checkbox" checked={recurring} onChange={(event) => { setRecurring(event.target.checked); if (event.target.checked) setInstallmentCount('1') }} disabled={busy} /><span><strong>Repetir todo mês sem data de término</strong><small>As ocorrências são criadas somente até o mês consultado. Valores futuros não entram nos saldos.</small></span></label>}
     {expense?.recurring_series_id && <p className="invite-help">Esta despesa faz parte de uma série mensal. Salvar alterações modifica somente esta ocorrência; a série continuará com os dados usados no próximo mês.</p>}
@@ -984,24 +1133,26 @@ function Expense({ client, groupId, groupName, userId, expense, onBack, onSaved 
   </form>}</section>
 }
 
-function Login({ configured, onSignIn, busy, error }: {
+function Login({ configured, onSignIn, onRecover, busy, error }: {
   configured: boolean
-  onSignIn: (email: string, password: string) => Promise<void>
+  onSignIn: (identifier: string, password: string) => Promise<void>
+  onRecover: (identifier: string) => Promise<void>
   busy: boolean
   error: string | null
 }) {
-  const [email, setEmail] = useState('')
+  const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    void onSignIn(email.trim(), password)
+    void onSignIn(identifier.trim(), password)
   }
 
-  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><img className="brand-logo" src={brandLogoUrl} alt="" /><span className="brand-name">Split<span>Uai</span></span></div><div className="eyebrow">BEM-VINDE DE VOLTA</div><h1>Que bom te ver<span className="heading-dot">.</span></h1><p className="form-intro">Entre na sua conta para continuar dividindo.</p><form onSubmit={submit}><label>Seu e-mail<input type="email" autoComplete="username" placeholder="voce@email.com" value={email} onChange={(event) => setEmail(event.target.value)} required disabled={!configured || busy} /></label><label>Senha<input type="password" autoComplete="current-password" placeholder="Sua senha" value={password} onChange={(event) => setPassword(event.target.value)} required disabled={!configured || busy} /></label><button className="button button-dark full-button" type="submit" disabled={!configured || busy}>{busy ? 'Entrando…' : 'Entrar'} <span>→</span></button>{!configured && <p className="auth-message" role="status">Autenticação não configurada neste ambiente. Novas contas continuam disponíveis somente por convite.</p>}{error && <p className="auth-error" role="alert">{error}</p>}<div className="login-footnote">O SplitUai é privado. O acesso é feito por convite; não há cadastro público.</div></form></section>
+  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><img className="brand-logo" src={brandLogoUrl} alt="" /><span className="brand-name">Split<span>Uai</span></span></div><div className="eyebrow">BEM-VINDE DE VOLTA</div><h1>Que bom te ver<span className="heading-dot">.</span></h1><p className="form-intro">Entre na sua conta para continuar dividindo.</p><form onSubmit={submit}><label>E-mail ou @usuário<input type="text" autoComplete="username" placeholder="voce@email.com ou @ana_silva" value={identifier} onChange={(event) => setIdentifier(event.target.value)} required disabled={!configured || busy} /></label><label>Senha<input type="password" autoComplete="current-password" placeholder="Sua senha" value={password} onChange={(event) => setPassword(event.target.value)} required disabled={!configured || busy} /></label><button className="button button-dark full-button" type="submit" disabled={!configured || busy}>{busy ? 'Entrando…' : 'Entrar'} <span>→</span></button><button className="text-button" type="button" disabled={!configured || busy || !identifier.trim()} onClick={() => void onRecover(identifier.trim())}>Esqueci minha senha</button>{!configured && <p className="auth-message" role="status">Autenticação não configurada neste ambiente. Novas contas continuam disponíveis somente por convite.</p>}{error && <p className={error.startsWith('Se a conta') ? 'auth-message' : 'auth-error'} role={error.startsWith('Se a conta') ? 'status' : 'alert'}>{error}</p>}<div className="login-footnote">O SplitUai é privado. O acesso é feito por convite; não há cadastro público.</div></form></section>
 }
 
-function PasswordSetup({ onSubmit, onSignOut, busy, error }: {
+function PasswordSetup({ mode, onSubmit, onSignOut, busy, error }: {
+  mode: 'invite' | 'recovery'
   onSubmit: (password: string) => Promise<void>
   onSignOut: () => Promise<void>
   busy: boolean
@@ -1021,10 +1172,10 @@ function PasswordSetup({ onSubmit, onSignOut, busy, error }: {
     void onSubmit(password)
   }
 
-  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><img className="brand-logo" src={brandLogoUrl} alt="" /><span className="brand-name">Split<span>Uai</span></span></div><div className="eyebrow">CONVITE ACEITO</div><h1>Crie sua senha<span className="heading-dot">.</span></h1><p className="form-intro">Defina uma senha para entrar no SplitUai.</p><form onSubmit={submit}><label>Nova senha<input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={6} required disabled={busy} /></label><label>Confirme a senha<input type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={6} required disabled={busy} /></label><button className="button button-dark full-button" type="submit" disabled={busy}>{busy ? 'Salvando…' : 'Salvar senha'} <span>→</span></button>{(validationError || error) && <p className="auth-error" role="alert">{validationError ?? error}</p>}<button className="text-button auth-signout" type="button" onClick={() => void onSignOut()} disabled={busy}>Sair</button></form></section>
+  return <section className="page-wrap form-wrap auth-wrap"><div className="brand auth-brand"><img className="brand-logo" src={brandLogoUrl} alt="" /><span className="brand-name">Split<span>Uai</span></span></div><div className="eyebrow">{mode === 'invite' ? 'CONVITE ACEITO' : 'RECUPERAÇÃO DE ACESSO'}</div><h1>{mode === 'invite' ? 'Crie sua senha' : 'Defina uma nova senha'}<span className="heading-dot">.</span></h1><p className="form-intro">{mode === 'invite' ? 'Defina uma senha para entrar no SplitUai.' : 'Escolha uma nova senha para sua conta SplitUai.'}</p><form onSubmit={submit}><label>Nova senha<input type="password" autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} minLength={6} required disabled={busy} /></label><label>Confirme a senha<input type="password" autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)} minLength={6} required disabled={busy} /></label><button className="button button-dark full-button" type="submit" disabled={busy}>{busy ? 'Salvando…' : 'Salvar senha'} <span>→</span></button>{(validationError || error) && <p className="auth-error" role="alert">{validationError ?? error}</p>}<button className="text-button auth-signout" type="button" onClick={() => void onSignOut()} disabled={busy}>Sair</button></form></section>
 }
 
-function MyInvitations({ invitations, onRefresh, onAccept }: { invitations: MyGroupInvitation[]; onRefresh: () => void; onAccept: (id: string) => Promise<void> }) {
+function MyInvitations({ invitations, onRefresh, onAccept, onDecline }: { invitations: MyGroupInvitation[]; onRefresh: () => void; onAccept: (id: string) => Promise<void>; onDecline: (id: string) => Promise<void> }) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -1034,7 +1185,89 @@ function MyInvitations({ invitations, onRefresh, onAccept }: { invitations: MyGr
     catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível aceitar este convite. Confira se ele ainda está válido e foi enviado para seu e-mail.') }
     finally { setBusy(false) }
   }
-  return <section className="page-wrap"><div className="eyebrow">ESPAÇO PESSOAL</div><h1>Convites recebidos<span className="heading-dot">.</span></h1><p className="form-intro">Convites enviados ao e-mail da sua conta.</p>{error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}{invitations.length === 0 ? <div className="empty-expenses"><strong>Nenhum convite pendente.</strong><p>Quando alguém convidar o e-mail desta conta, ele aparecerá aqui.</p><button className="text-button" onClick={onRefresh}>Atualizar</button></div> : <div className="invitation-list">{invitations.map((invitation) => { const expired = invitation.status === 'expired' || new Date(invitation.expires_at) <= new Date(); return <div className="invitation-row" key={invitation.id}><div><strong>{invitation.group_name}</strong><small>{invitation.invited_email} · válido até {new Date(invitation.expires_at).toLocaleDateString('pt-BR')}</small></div><span className={`invite-status status-${expired ? 'expired' : invitation.status}`}>{expired ? 'Expirado' : 'Pendente'}</span><button className="button button-dark" disabled={busy || expired} onClick={() => void accept(invitation.id)}>{busy ? 'Aceitando…' : 'Aceitar convite'}</button></div> })}</div>}</section>
+  async function decline(id: string) {
+    setBusy(true); setError(null); setNotice(null)
+    try { await onDecline(id); setNotice('Convite recusado.') }
+    catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível recusar este convite.') }
+    finally { setBusy(false) }
+  }
+  return <section className="page-wrap"><div className="eyebrow">ESPAÇO PESSOAL</div><h1>Convites recebidos<span className="heading-dot">.</span></h1><p className="form-intro">Convites enviados para sua conta ou e-mail.</p>{error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}{invitations.length === 0 ? <div className="empty-expenses"><strong>Nenhum convite pendente.</strong><p>Quando alguém convidar você ou o e-mail da sua conta, o convite aparecerá aqui.</p><button className="text-button" onClick={onRefresh}>Atualizar</button></div> : <div className="invitation-list">{invitations.map((invitation) => { const expired = invitation.status === 'expired' || new Date(invitation.expires_at) <= new Date(); return <div className="invitation-row" key={invitation.id}><div><strong>{invitation.group_name}</strong><small>{invitation.invited_email || 'Convite direto para sua conta'} · válido até {new Date(invitation.expires_at).toLocaleDateString('pt-BR')}</small></div><span className={`invite-status status-${expired ? 'expired' : invitation.status}`}>{expired ? 'Expirado' : 'Pendente'}</span><button className="button button-dark" disabled={busy || expired} onClick={() => void accept(invitation.id)}>{busy ? 'Aceitando…' : 'Aceitar convite'}</button><button className="button button-light" disabled={busy || expired} onClick={() => void decline(invitation.id)}>Recusar</button></div> })}</div>}</section>
+}
+
+function Friends({ client, userId }: { client: NonNullable<typeof supabase>; userId: string }) {
+  const [username, setUsername] = useState('')
+  const [result, setResult] = useState<FriendSearchResult | null>(null)
+  const [friendships, setFriendships] = useState<FriendshipView[]>([])
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+
+  async function refresh() {
+    const rows = await listMyFriendships(client)
+    setFriendships(rows)
+    return rows
+  }
+  useEffect(() => {
+    let active = true
+    void listMyFriendships(client).then((rows) => { if (active) setFriendships(rows) })
+      .catch((reason) => { if (active) setError(reason instanceof Error ? reason.message : 'Não foi possível carregar suas amizades.') })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [client, userId])
+
+  async function search(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault(); setBusy(true); setError(null); setNotice(null); setResult(null)
+    try {
+      const found = await searchFriendByUsername(client, username.trim().replace(/^@/, ''))
+      setResult(found)
+      if (!found) setNotice('Nenhum perfil encontrado com esse username.')
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível buscar esse username.') }
+    finally { setBusy(false) }
+  }
+
+  async function action(targetId: string, kind: 'send' | 'accept' | 'decline' | 'cancel' | 'unfriend') {
+    setBusy(true); setError(null); setNotice(null)
+    try {
+      await manageFriendship(client, targetId, kind)
+      const rows = await refresh()
+      const relationship = rows.find((row) => row.other_user_id === targetId)
+      setResult((current) => current?.user_id === targetId ? { ...current, relationship_status: relationship?.status ?? null, request_direction: relationship?.direction ?? null } : current)
+      setNotice(kind === 'send' ? 'Pedido enviado.' : kind === 'accept' ? 'Amizade aceita.' : kind === 'decline' ? 'Pedido recusado.' : kind === 'cancel' ? 'Pedido cancelado.' : 'Amizade desfeita.')
+    } catch (reason) { setError(reason instanceof Error ? reason.message : 'Não foi possível atualizar esta amizade.') }
+    finally { setBusy(false) }
+  }
+
+  const label = (person: { username: string | null; display_name: string | null }) => person.username ? `@${person.username}` : person.display_name || 'Pessoa usuária'
+  const incoming = friendships.filter((row) => row.status === 'pending' && row.direction === 'incoming')
+  const outgoing = friendships.filter((row) => row.status === 'pending' && row.direction === 'outgoing')
+  const friends = friendships.filter((row) => row.status === 'accepted')
+  return <section className="page-wrap">
+    <div className="eyebrow">ESPAÇO PESSOAL</div><h1>Amizades<span className="heading-dot">.</span></h1>
+    <p className="form-intro">Encontre pessoas pelo username completo. Só mostramos username, nome e foto; e-mails e grupos permanecem privados.</p>
+    <form className="friend-search" onSubmit={(event) => void search(event)}>
+      <label htmlFor="friend-username">Username</label><div className="friend-search-row"><span aria-hidden="true">@</span><input id="friend-username" value={username} onChange={(event) => setUsername(event.target.value.replace(/^@/, ''))} minLength={3} maxLength={24} pattern="[A-Za-z0-9_]{3,24}" placeholder="ana_silva" required disabled={busy} /><button className="button button-dark" disabled={busy}>{busy ? 'Buscando…' : 'Buscar'}</button></div>
+      <small>Busca exata, com limite de tentativas para proteger os perfis.</small>
+    </form>
+    {error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}
+    {result && <div className="friend-result"><div className="friend-person">{result.avatar_url ? <img className="avatar avatar-photo" src={result.avatar_url} alt="" /> : <span className="avatar avatar-you">{(result.username?.[0] ?? 'U').toUpperCase()}</span>}<div><strong>{label(result)}</strong>{result.display_name && <small>{result.display_name}</small>}</div></div>
+      {!result.relationship_status && <button className="button button-dark" disabled={busy} onClick={() => void action(result.user_id, 'send')}>Enviar pedido</button>}
+      {result.relationship_status === 'accepted' && <span className="role-badge">Amizade</span>}
+      {result.relationship_status === 'pending' && result.request_direction === 'outgoing' && <><span className="invite-status status-pending">Pedido enviado</span><button className="button button-light" disabled={busy} onClick={() => void action(result.user_id, 'cancel')}>Cancelar</button></>}
+      {result.relationship_status === 'pending' && result.request_direction === 'incoming' && <><button className="button button-dark" disabled={busy} onClick={() => void action(result.user_id, 'accept')}>Aceitar</button><button className="button button-light" disabled={busy} onClick={() => void action(result.user_id, 'decline')}>Recusar</button></>}
+    </div>}
+    <div className="section-title"><div><h2>Pedidos recebidos</h2><p>{incoming.length} pendente{incoming.length === 1 ? '' : 's'}</p></div></div>
+    {incoming.length ? <div className="invitation-list">{incoming.map((row) => <div className="invitation-row" key={row.id}><FriendIdentity row={row} label={label} /><button className="button button-dark" disabled={busy} onClick={() => void action(row.other_user_id, 'accept')}>Aceitar</button><button className="button button-light" disabled={busy} onClick={() => void action(row.other_user_id, 'decline')}>Recusar</button></div>)}</div> : <div className="empty-expenses"><strong>{loading ? 'Carregando…' : 'Nenhum pedido recebido.'}</strong><p>Pedidos que outras pessoas enviarem aparecerão aqui.</p></div>}
+    <div className="section-title"><div><h2>Pedidos enviados</h2><p>{outgoing.length} aguardando resposta</p></div></div>
+    {outgoing.length ? <div className="invitation-list">{outgoing.map((row) => <div className="invitation-row" key={row.id}><FriendIdentity row={row} label={label} /><span className="invite-status status-pending">Aguardando</span><button className="button button-light" disabled={busy} onClick={() => void action(row.other_user_id, 'cancel')}>Cancelar pedido</button></div>)}</div> : <div className="empty-expenses"><strong>Nenhum pedido enviado.</strong><p>Pedidos pendentes podem ser cancelados a qualquer momento.</p></div>}
+    <div className="section-title"><div><h2>Minhas amizades</h2><p>{friends.length} {friends.length === 1 ? 'pessoa' : 'pessoas'}</p></div></div>
+    {friends.length ? <div className="invitation-list">{friends.map((row) => <div className="invitation-row" key={row.id}><FriendIdentity row={row} label={label} /><span className="role-badge">Amizade</span><button className="button button-light" disabled={busy} onClick={() => void action(row.other_user_id, 'unfriend')}>Desfazer amizade</button></div>)}</div> : <div className="empty-expenses"><strong>{loading ? 'Carregando…' : 'Você ainda não tem amizades.'}</strong><p>Busque uma pessoa pelo username para começar.</p></div>}
+    <p className="friend-invite-note">A amizade não adiciona ninguém a grupos nem aceita convites. Convites de grupo continuam sendo enviados e aceitos separadamente.</p>
+  </section>
+}
+
+function FriendIdentity({ row, label }: { row: FriendshipView; label: (person: { username: string | null; display_name: string | null }) => string }) {
+  return <div className="friend-person">{row.avatar_url ? <img className="avatar avatar-photo" src={row.avatar_url} alt="" /> : <span className="avatar avatar-you">{(row.username?.[0] ?? 'U').toUpperCase()}</span>}<div><strong>{label(row)}</strong>{row.display_name && <small>{row.display_name}</small>}</div></div>
 }
 
 function UserProfile({ client, userId, viewerId, onBack, onOpenGroup }: {
@@ -1113,6 +1346,91 @@ function UserProfile({ client, userId, viewerId, onBack, onOpenGroup }: {
       </article>)}</div>}
     </>}
   </section>
+}
+
+function NotificationCenter({ client, userId, onOpenGroup }: { client: NonNullable<typeof supabase>; userId: string; onOpenGroup: (id: string, recordId?: string) => void }) {
+  const [rows, setRows] = useState<Array<{ id: string; title: string; message: string; destination: string; created_at: string; read_at: string | null }>>([])
+  const [permission, setPermission] = useState(() => ('Notification' in window ? Notification.permission : 'unsupported'))
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState('')
+  const vapidKey = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined
+
+  async function refresh() {
+    const { data, error } = await client.from('notifications').select('id,title,message,destination,created_at,read_at').order('created_at', { ascending: false }).limit(100)
+    if (error) { setNotice('Não foi possível carregar seus avisos.'); return }
+    setRows(data ?? [])
+  }
+  useEffect(() => {
+    void refresh()
+    const channel = client.channel(`notification-center:${userId}`).on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` }, () => void refresh()).subscribe()
+    return () => { void client.removeChannel(channel) }
+  }, [client, userId])
+
+  async function enablePush() {
+    if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) { setPermission('unsupported'); return }
+    if (!vapidKey) { setNotice('A chave pública VAPID ainda não está configurada neste ambiente.'); return }
+    setBusy(true); setNotice('')
+    try {
+      const granted = await Notification.requestPermission()
+      setPermission(granted)
+      if (granted !== 'granted') { setNotice(granted === 'denied' ? 'Permissão negada. Os avisos continuam disponíveis nesta central; altere a permissão nas configurações do navegador para ativar o Push.' : 'Permissão não concedida. Os avisos continuam disponíveis nesta central.'); return }
+      const registration = await navigator.serviceWorker.ready
+      const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: decodeVapidKey(vapidKey) })
+      const json = subscription.toJSON()
+      const { error } = await client.from('web_push_subscriptions').upsert({ user_id: userId, endpoint: subscription.endpoint, p256dh: json.keys?.p256dh, auth: json.keys?.auth }, { onConflict: 'endpoint' })
+      if (error) throw error
+      setNotice('Este dispositivo está inscrito para receber avisos Push.')
+    } catch (error) { setNotice(error instanceof Error ? error.message : 'Não foi possível ativar o Push neste dispositivo.') }
+    finally { setBusy(false) }
+  }
+
+  async function disablePush() {
+    setBusy(true)
+    try {
+      const registration = await navigator.serviceWorker.ready
+      const subscription = await registration.pushManager.getSubscription()
+      if (subscription) {
+        await client.from('web_push_subscriptions').delete().eq('endpoint', subscription.endpoint).eq('user_id', userId)
+        await subscription.unsubscribe()
+      }
+      setNotice('A inscrição deste dispositivo foi desativada. Os avisos seguem na central.')
+    } finally { setBusy(false) }
+  }
+
+  async function toggleRead(row: typeof rows[number]) {
+    const readAt = row.read_at ? null : new Date().toISOString()
+    const { error } = await client.from('notifications').update({ read_at: readAt }).eq('id', row.id)
+    if (!error) setRows((current) => current.map((item) => item.id === row.id ? { ...item, read_at: readAt } : item))
+  }
+
+  return <section className="page-wrap">
+    <div className="page-heading"><div><span className="eyebrow">CENTRAL</span><h1>Seus avisos</h1><p>Atualizações de grupos, convites e acertos ficam guardadas aqui.</p></div></div>
+    <section className="appearance-card" aria-labelledby="push-heading"><h2 id="push-heading">Notificações neste dispositivo</h2>
+      {permission === 'unsupported' ? <p>Este navegador não oferece Web Push. Você ainda pode consultar os avisos nesta central.</p> : permission === 'denied' ? <p>A permissão foi negada. Os avisos continuam nesta central; reative a permissão nas configurações do navegador para voltar a receber Push.</p> : <p>O Push é opcional e só será ativado depois que você escolher permitir neste dispositivo. Em iPhone e iPad, adicione a web app à Tela de Início para receber Web Push.</p>}
+      <div className="form-actions"><button className="button button-dark" type="button" onClick={() => void enablePush()} disabled={busy || permission === 'unsupported' || permission === 'denied'}>Ativar neste dispositivo</button><button className="button button-light" type="button" onClick={() => void disablePush()} disabled={busy || permission === 'unsupported'}>Desativar inscrição</button></div>
+      {notice && <p role="status">{notice}</p>}
+    </section>
+    <div className="notification-list">{rows.length === 0 ? <div className="empty-state"><strong>Nenhum aviso por enquanto</strong><p>Quando houver uma atualização, ela aparecerá aqui.</p></div> : rows.map((row) => <article className={`notification-row${row.read_at ? '' : ' notification-unread'}`} key={row.id}>
+      <div><strong>{row.title}</strong><p>{row.message}</p><time dateTime={row.created_at}>{new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(row.created_at))}</time></div>
+      <div className="notification-actions"><button className="button button-light" type="button" onClick={() => void toggleRead(row)}>{row.read_at ? 'Marcar não lido' : 'Marcar como lido'}</button><button className="button button-dark" type="button" onClick={() => { const target = new URL(row.destination, window.location.origin); const groupId = target.searchParams.get('group'); const tab = target.searchParams.get('tab'); if (groupId) onOpenGroup(groupId, target.searchParams.get('expense') ?? target.searchParams.get('settlement') ?? undefined); else if (tab === 'invitations' || tab === 'friends') window.location.assign(row.destination); }}>Abrir</button></div>
+    </article>)}</div>
+    <p className="form-note">O texto do Push é genérico para reduzir a exposição na tela bloqueada. O ícone e a aparência dependem do navegador e do sistema operacional. A entrega em relógios depende do espelhamento e das configurações do telefone e do relógio.</p>
+  </section>
+}
+
+function decodeVapidKey(value: string) {
+  const padding = '='.repeat((4 - value.length % 4) % 4)
+  const raw = atob((value + padding).replace(/-/g, '+').replace(/_/g, '/'))
+  return Uint8Array.from(raw, (char) => char.charCodeAt(0))
+}
+
+function formatBrlInput(value: string) {
+  const digits = value.replace(/\D/g, '')
+  if (!digits) return ''
+  const cents = BigInt(digits)
+  const whole = (cents / 100n).toLocaleString('pt-BR')
+  const fraction = String(cents % 100n).padStart(2, '0')
+  return `${whole},${fraction}`
 }
 
 function AppearanceSettings({ colorTheme, onColorThemeChange, darkMode, onDarkModeChange }: {

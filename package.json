@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "validate:category-suggestions": "node scripts/validate-category-suggestions.mjs",
     "preview": "vite preview"
   },
   "dependencies": {

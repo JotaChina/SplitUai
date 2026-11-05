@@ -60,13 +60,13 @@ export function parseSplitwiseCsv(text: string, filename: string, memberIds: Rec
   const rows = readCsv(text)
   if (rows.length < 2) throw new Error('O CSV não tem linhas para importar.')
   const headers = rows[0].map((header) => header.trim().toLocaleLowerCase('pt-BR'))
-  const indexes = ['data', 'descrição', 'categoria', 'custo', 'jota']
+  const indexes = ['data', 'descrição', 'categoria', 'custo']
   for (const header of indexes) if (!headers.includes(header)) throw new Error(`Não encontrei a coluna “${header}” no arquivo.`)
   const dateIndex = headers.indexOf('data'), descriptionIndex = headers.indexOf('descrição')
   const categoryIndex = headers.indexOf('categoria'), amountIndex = headers.indexOf('custo'), currencyIndex = headers.indexOf('moeda')
   const nameColumns = rows[0].map((header, index) => ({ header: header.trim(), index }))
     .filter(({ header }) => !['data', 'descrição', 'categoria', 'custo', 'moeda'].includes(header.toLocaleLowerCase('pt-BR')))
-  if (nameColumns.length !== 2) throw new Error('Este importador espera exatamente duas colunas de participantes no CSV.')
+  if (nameColumns.length < 2) throw new Error('Não encontrei pelo menos duas colunas de participantes no CSV.')
   const memberNames = nameColumns.map(({ header }) => header)
   const expenses: SplitwiseImportExpense[] = []
   const settlements: SplitwiseImportSettlement[] = []
@@ -87,39 +87,53 @@ export function parseSplitwiseCsv(text: string, filename: string, memberIds: Rec
       skipped.push({ row: rowNumber, description, reason: 'Moeda diferente de BRL.' })
       return
     }
-    const impacts = nameColumns.map(({ header, index: columnIndex }) => ({ name: header, amount: parseMoney(cells[columnIndex] ?? '') }))
-    const firstAmount = impacts[0].amount, secondAmount = impacts[1].amount
-    if (firstAmount === null || secondAmount === null || firstAmount === 0 || secondAmount === 0 || firstAmount !== -secondAmount) {
-      skipped.push({ row: rowNumber, description, reason: 'Os valores dos participantes não formam um par oposto válido.' })
+    const impacts = nameColumns.map(({ header, index: columnIndex }) => {
+      const value = (cells[columnIndex] ?? '').trim()
+      return { name: header, amount: value ? parseMoney(value) : 0 }
+    })
+    if (impacts.some(({ amount: impact }) => impact === null)) {
+      skipped.push({ row: rowNumber, description, reason: 'Há um valor de participante inválido.' })
       return
     }
-    const [first, second] = impacts as [{ name: string; amount: number }, { name: string; amount: number }]
-    const firstId = memberIds[first.name] ?? first.name, secondId = memberIds[second.name] ?? second.name
-    if (!firstId || !secondId || firstId === secondId) throw new Error(`Associe as duas pessoas do CSV a participantes diferentes do grupo. Linha ${rowNumber}.`)
+    const validImpacts = impacts as Array<{ name: string; amount: number }>
+    const totalImpact = validImpacts.reduce((total, impact) => total + impact.amount, 0)
     const sourceKey = `splitwise:${sourcePrefix}:${rowNumber}`
     if (category.toLocaleLowerCase('pt-BR') === 'pagamento') {
-      // In a Splitwise export, the payer's balance impact is positive and the
-      // recipient's is negative. This is the same sign convention used for
-      // expenses, and calculateBalances adds the payer / subtracts recipient.
-      const paidBy = first.amount > 0 ? first : second
-      const receivedBy = first.amount < 0 ? first : second
-      settlements.push({ source_key: sourceKey, paid_by: memberIds[paidBy.name], received_by: memberIds[receivedBy.name],
-        amount_cents: Math.abs(first.amount), settlement_date: date, description: description || 'Acerto Splitwise' })
+      const positive = validImpacts.filter((impact) => impact.amount > 0)
+      const negative = validImpacts.filter((impact) => impact.amount < 0)
+      if (totalImpact !== 0 || positive.length !== 1 || negative.length !== 1 || positive[0].amount !== -negative[0].amount || positive[0].amount !== amount) {
+        skipped.push({ row: rowNumber, description, reason: 'Os valores dos participantes não formam um pagamento válido.' })
+        return
+      }
+      const paidBy = positive[0], receivedBy = negative[0]
+      const paidById = memberIds[paidBy.name] ?? paidBy.name
+      const receivedById = memberIds[receivedBy.name] ?? receivedBy.name
+      if (!paidById || !receivedById || paidById === receivedById) throw new Error(`Associe as pessoas do pagamento a participantes diferentes do grupo. Linha ${rowNumber}.`)
+      settlements.push({ source_key: sourceKey, paid_by: paidById, received_by: receivedById,
+        amount_cents: paidBy.amount, settlement_date: date, description: description || 'Acerto Splitwise' })
       return
     }
-    const paidBy = first.amount > 0 ? first : second
-    const owing = first.amount < 0 ? first : second
-    if (Math.abs(paidBy.amount) > amount) {
-      skipped.push({ row: rowNumber, description, reason: 'Crédito do participante maior que o custo da despesa.' })
+    const positive = validImpacts.filter((impact) => impact.amount > 0)
+    const owing = validImpacts.filter((impact) => impact.amount < 0)
+    const totalOwed = owing.reduce((total, impact) => total + Math.abs(impact.amount), 0)
+    if (totalImpact !== 0 || positive.length !== 1 || owing.length === 0 || totalOwed > amount) {
+      skipped.push({ row: rowNumber, description, reason: 'Os valores dos participantes não formam uma divisão válida para a despesa.' })
       return
+    }
+    const paidBy = positive[0]
+    const paidById = memberIds[paidBy.name] ?? paidBy.name
+    const shares = [
+      { user_id: paidById, amount_cents: amount - totalOwed },
+      ...owing.map((impact) => ({ user_id: memberIds[impact.name] ?? impact.name, amount_cents: Math.abs(impact.amount) })),
+    ]
+    if (shares.some((share) => !share.user_id) || new Set(shares.map((share) => share.user_id)).size !== shares.length) {
+      throw new Error(`Associe cada pessoa da despesa a um participante diferente do grupo. Linha ${rowNumber}.`)
     }
     expenses.push({ source_key: sourceKey, description, category: categoryFor(category, description), amount_cents: amount,
-      paid_by: memberIds[paidBy.name], expense_date: date,
+      paid_by: paidById, expense_date: date,
       notes: `Importado do Splitwise · Categoria original: ${category || 'não informada'}`,
-      shares: [
-        { user_id: memberIds[paidBy.name], amount_cents: amount - Math.abs(paidBy.amount) },
-        { user_id: memberIds[owing.name], amount_cents: Math.abs(paidBy.amount) },
-      ] })
+      shares })
   })
   return { expenses, settlements, skipped, memberNames }
 }
+

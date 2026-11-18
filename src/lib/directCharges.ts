@@ -8,7 +8,7 @@ export type DirectCharge = {
   expense_attachment: string | null; payment_attachment: string | null
   created_at: string; updated_at: string; other_name: string; creditor_pix_key: string | null
 }
-export type ChargeEvent = { id: string; actor_id: string; action: string; note: string | null; created_at: string }
+export type ChargeEvent = { id: string; actor_id: string; action: string; note: string | null; attachment: string | null; created_at: string }
 export const chargeStatusLabels: Record<ChargeStatus, string> = {
   pending: 'Aguardando reconhecimento', accepted: 'Reconhecida', disputed: 'Contestada',
   payment_reported: 'Pagamento informado', paid: 'Quitada', cancelled: 'Cancelada',

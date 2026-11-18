@@ -50,8 +50,9 @@ select set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000001'
 select public.manage_direct_charge('10000000-0000-0000-0000-000000000001','reopen');
 select set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000002',false);
 select public.manage_direct_charge('10000000-0000-0000-0000-000000000001','accept');
+insert into storage.objects(bucket_id,name) values('direct-charge-receipts','10000000-0000-0000-0000-000000000001/00000000-0000-0000-0000-000000000002/payment.pdf');
 select pg_temp.denied($q$select public.manage_direct_charge('10000000-0000-0000-0000-000000000001','report_payment',null,'another/receipt.pdf')$q$,'22023');
-select public.manage_direct_charge('10000000-0000-0000-0000-000000000001','report_payment');
+select public.manage_direct_charge('10000000-0000-0000-0000-000000000001','report_payment',null,'10000000-0000-0000-0000-000000000001/00000000-0000-0000-0000-000000000002/payment.pdf');
 select pg_temp.denied($q$select public.manage_direct_charge('10000000-0000-0000-0000-000000000001','confirm_payment')$q$);
 select set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000001',false);
 select pg_temp.denied($q$select public.manage_direct_charge('10000000-0000-0000-0000-000000000001','cancel')$q$);
@@ -65,10 +66,13 @@ select public.manage_direct_charge('10000000-0000-0000-0000-000000000001','repor
 select set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000001',false);
 select public.manage_direct_charge('10000000-0000-0000-0000-000000000001','confirm_payment');
 select pg_temp.assert((select status='paid' from public.direct_charges),'only creditor confirms payment, even after unfriend');
+select pg_temp.assert((select count(*)=1 from public.direct_charge_events where action='report_payment' and attachment is not null),'earlier payment receipt remains in immutable history');
+select pg_temp.denied($q$update public.direct_charge_events set note='Rewritten'$q$);
 select pg_temp.denied($q$select public.manage_direct_charge('10000000-0000-0000-0000-000000000001','reopen')$q$);
 reset role;
 select pg_temp.assert((select count(*)=1 from public.notifications where event_key='direct:10000000-0000-0000-0000-000000000001:created'),'creation emits one durable inbox notification');
 set role anon;
+select pg_temp.denied($q$select public.create_direct_charge('10000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000002','Anonymous',100)$q$);
 select pg_temp.denied($q$select public.list_my_direct_charges()$q$);
 select pg_temp.denied($q$select public.manage_direct_charge('10000000-0000-0000-0000-000000000001','cancel')$q$);
 reset role;

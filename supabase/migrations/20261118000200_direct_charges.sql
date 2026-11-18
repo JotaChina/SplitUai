@@ -28,6 +28,7 @@ create table public.direct_charge_events (
   charge_id uuid not null references public.direct_charges(id),
   actor_id uuid not null references auth.users(id),
   action text not null,
+  attachment text,
   note text check (char_length(note) <= 500),
   created_at timestamptz not null default now()
 );
@@ -131,8 +132,8 @@ begin
     expense_attachment=case when p_action='attach_expense' then p_attachment else expense_attachment end,
     payment_attachment=case when p_action='report_payment' then p_attachment else payment_attachment end
     where id=p_id;
-  insert into public.direct_charge_events(charge_id,actor_id,action,note)
-    values(p_id,v_actor,p_action,nullif(btrim(p_note),''));
+  insert into public.direct_charge_events(charge_id,actor_id,action,note,attachment)
+    values(p_id,v_actor,p_action,nullif(btrim(p_note),''),p_attachment);
   v_target:=case when v_actor=c.creditor_id then c.debtor_id else c.creditor_id end;
   perform private.add_notification(v_target,'direct:'||p_id||':'||p_action||':'||txid_current(),
     'direct_charge_updated',case when p_action='report_payment' then 'Pagamento informado'

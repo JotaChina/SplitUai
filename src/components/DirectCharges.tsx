@@ -79,7 +79,7 @@ export function DirectCharges({ client, userId, initialFriendId, targetId }: {
   return <section className="page-wrap direct-charges" aria-busy={loading}>
     <div className="page-heading"><div><div className="eyebrow">SEM GRUPO</div><h1>Entre amigos<span className="heading-dot">.</span></h1><p>Cobranças diretas entre amizades aceitas.</p></div><button type="button" className="button button-dark" onClick={() => setShowForm(v => !v)}>{showForm ? 'Fechar formulário' : 'Criar cobrança'}</button></div>
     <p className="form-note">Reconheça o valor antes de informar o pagamento. A quitação depende da confirmação de quem recebe. O pagamento é feito pelo seu banco.</p>
-    <div className="charge-summary"><article className="settlement-panel"><small>A RECEBER · RECONHECIDAS</small><strong>{formatBrlCents(total(true))}</strong></article><article className="settlement-panel"><small>A PAGAR · RECONHECIDAS</small><strong>{formatBrlCents(total(false))}</strong></article></div>
+    <div className="charge-summary"><article className="settlement-panel"><small>A RECEBER · RECONHECIDAS</small><strong>{loading || loadError ? '—' : formatBrlCents(total(true))}</strong></article><article className="settlement-panel"><small>A PAGAR · RECONHECIDAS</small><strong>{loading || loadError ? '—' : formatBrlCents(total(false))}</strong></article></div>
     {loadError && <p className="auth-error" role="alert">{loadError} <button type="button" className="text-button" onClick={() => void refresh()}>Tentar novamente</button></p>}
     {error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}
     {showForm && <form className="charge-form settlement-panel" onSubmit={e => void create(e)}><h2>Nova cobrança</h2>
@@ -114,7 +114,7 @@ function ChargeCard({ client, row, userId, highlighted, onSaved }: {
   const outgoing = row.creditor_id === userId
   async function history() {
     setHistoryLoading(true)
-    const { data, error: reason } = await client.from('direct_charge_events').select('id,actor_id,action,note,created_at').eq('charge_id', row.id).order('created_at')
+    const { data, error: reason } = await client.from('direct_charge_events').select('id,actor_id,action,note,attachment,created_at').eq('charge_id', row.id).order('created_at')
     if (reason) setError(chargeError(reason)); else setEvents((data ?? []) as ChargeEvent[])
     setHistoryLoading(false)
   }
@@ -159,6 +159,6 @@ function ChargeCard({ client, row, userId, highlighted, onSaved }: {
       {(action === 'report_payment' || action === 'attach_expense') && <label>Comprovante {action === 'report_payment' ? '(opcional)' : ''}<input type="file" accept="image/jpeg,image/png,image/webp,application/pdf" required={action === 'attach_expense'} disabled={busy} onChange={e => setFile(e.target.files?.[0] ?? null)} /><small>Até 5 MB. Disponível apenas para vocês dois.</small></label>}
       <div className="charge-actions"><button className="button button-dark" disabled={busy}>{busy ? 'Salvando…' : 'Confirmar'}</button><button type="button" className="button button-light" disabled={busy} onClick={() => setAction(null)}>Voltar</button></div>
     </form>}
-    <details onToggle={e => { if (e.currentTarget.open) void history() }}><summary>Histórico da cobrança</summary>{historyLoading ? <p role="status">Carregando histórico…</p> : <ol className="charge-history">{events.map(item => <li key={item.id}><strong>{chargeActionLabels[item.action] ?? item.action}</strong><small>{item.actor_id === userId ? 'Você' : row.other_name} · {new Date(item.created_at).toLocaleString('pt-BR')}</small>{item.note && <p>{item.note}</p>}</li>)}</ol>}</details>
+    <details onToggle={e => { if (e.currentTarget.open) void history() }}><summary>Histórico da cobrança</summary>{historyLoading ? <p role="status">Carregando histórico…</p> : <ol className="charge-history">{events.map(item => <li key={item.id}><strong>{chargeActionLabels[item.action] ?? item.action}</strong><small>{item.actor_id === userId ? 'Você' : row.other_name} · {new Date(item.created_at).toLocaleString('pt-BR')}</small>{item.note && <p>{item.note}</p>}{item.attachment && <button type="button" className="text-button" onClick={() => void openReceipt(item.attachment!)}>Ver comprovante deste registro</button>}</li>)}</ol>}</details>
   </article>
 }

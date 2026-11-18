@@ -55,6 +55,7 @@ import {
 } from './lib/expenses'
 import { parseSplitwiseCsv, type SplitwiseCsvPreview } from './lib/splitwiseCsv'
 import { listMyFriendships, manageFriendship, searchFriendByUsername, type FriendSearchResult, type FriendshipView } from './lib/friendships'
+import { ProfileFriendshipActions } from './components/ProfileFriendshipActions'
 
 type Page = 'groups' | 'group' | 'new-group' | 'expense' | 'account' | 'invitations' | 'profile' | 'friends' | 'notifications'
 type InstallPromptEvent = Event & {
@@ -450,7 +451,7 @@ function App() {
         {page === 'group' && !selectedGroupId && <Groups groups={groups} loading={groupsLoading} error={groupsError} onRefresh={() => void refreshGroups()} onOpen={(id) => { setSelectedGroupId(id); setPage('group') }} onCreate={() => setPage('new-group')} />}
         {page === 'expense' && selectedGroupId && supabase && <Expense client={supabase} groupId={selectedGroupId} groupName={groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo'} userId={session.user.id} expense={editingExpense} onBack={() => { setEditingExpense(null); setPage('group') }} onSaved={() => { setEditingExpense(null); setPage('group') }} />}
         {page === 'account' && supabase && <Account client={supabase} email={session.user.email ?? ''} userId={session.user.id} onProfileChange={setAccountProfile} onSignOut={signOut} busy={authBusy} colorTheme={colorTheme} onColorThemeChange={setColorTheme} darkMode={darkMode} onDarkModeChange={setDarkMode} />}
-        {page === 'profile' && supabase && profileUserId && <UserProfile client={supabase} userId={profileUserId} viewerId={session.user.id} onBack={() => setPage(selectedGroupId ? 'group' : 'groups')} onOpenGroup={(id) => { setSelectedGroupId(id); setPage('group') }} />}
+        {page === 'profile' && supabase && profileUserId && <UserProfile key={`${session.user.id}:${profileUserId}`} client={supabase} userId={profileUserId} viewerId={session.user.id} onBack={() => setPage(selectedGroupId ? 'group' : 'groups')} onOpenGroup={(id) => { setSelectedGroupId(id); setPage('group') }} />}
         {page === 'invitations' && <MyInvitations invitations={myInvitations} onRefresh={() => void refreshMyInvitations()} onAccept={acceptMyInvitation} onDecline={declineMyInvitation} />}
         {page === 'friends' && supabase && <Friends client={supabase} userId={session.user.id} />}
         {page === 'notifications' && supabase && <NotificationCenter client={supabase} userId={session.user.id} onOpenGroup={(id, recordId) => { setTargetNotificationRecordId(recordId ?? null); setSelectedGroupId(id); setPage('group') }} />}
@@ -1367,6 +1368,7 @@ function UserProfile({ client, userId, viewerId, onBack, onOpenGroup }: {
   return <section className="page-wrap profile-page"><button className="back-link" onClick={onBack}>← Voltar</button>
     {loading ? <p className="auth-loading">Carregando perfil…</p> : error ? <p className="auth-error" role="alert">{error}</p> : profile && <>
       <div className="profile-heading"><div className="profile-photo-preview">{profile.avatar_url ? <img src={profile.avatar_url} alt={`Foto de ${displayName}`} /> : (profile.display_name || profile.username || 'P').slice(0, 1).toUpperCase()}</div><div><div className="eyebrow">PERFIL DO PARTICIPANTE</div><h1>{displayName}<span className="heading-dot">.</span></h1>{profile.username && <p>@{profile.username}</p>}</div></div>
+      {userId !== viewerId && <ProfileFriendshipActions key={`${viewerId}:${userId}`} client={client} userId={userId} hasUsername={Boolean(profile.username)} />}
       <div className="profile-details-grid"><article className="settlement-panel"><small>NOME</small><strong>{profile.display_name || 'Não informado'}</strong></article><article className="settlement-panel"><small>APELIDO</small><strong>{profile.username ? `@${profile.username}` : 'Não definido'}</strong></article><article className="settlement-panel"><small>CHAVE PIX</small><strong>{profile.pix_key || 'Não informada'}</strong></article></div>
       <div className="section-title"><div><h2>Grupos em comum</h2><p>{sharedGroups.length} {sharedGroups.length === 1 ? 'grupo compartilhado' : 'grupos compartilhados'} com você</p></div></div>
       {sharedGroups.length === 0 ? <div className="empty-expenses"><strong>Nenhum grupo ativo em comum.</strong><p>Os detalhes do perfil ficam disponíveis para pessoas que compartilham um grupo ativo.</p></div> : <div className="profile-groups">{sharedGroups.map((group) => <article className="settlement-panel profile-group" key={group.id}>

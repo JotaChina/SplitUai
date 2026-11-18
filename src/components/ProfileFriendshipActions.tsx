@@ -11,10 +11,11 @@ function errorMessage(reason: unknown) {
 }
 
 // The parent keys this component by viewer and target to isolate profile state.
-export function ProfileFriendshipActions({ client, userId, hasUsername }: {
+export function ProfileFriendshipActions({ client, userId, hasUsername, onCharge }: {
   client: SupabaseClient
   userId: string
   hasUsername: boolean
+  onCharge?: () => void
 }) {
   const [relationship, setRelationship] = useState<FriendshipView | null>(null)
   const [loading, setLoading] = useState(true)
@@ -73,7 +74,7 @@ export function ProfileFriendshipActions({ client, userId, hasUsername }: {
       {!relationship && (hasUsername
         ? <button className="button button-dark" type="button" disabled={busy} onClick={() => void action('send')}>Enviar convite de amizade</button>
         : <p>Esta pessoa precisa definir um identificador público para receber convites de amizade.</p>)}
-      {relationship?.status === 'accepted' && <span className="role-badge" role="status">Vocês já são amigos</span>}
+      {relationship?.status === 'accepted' && <><span className="role-badge" role="status">Vocês já são amigos</span>{onCharge && <button className="button button-dark" type="button" onClick={onCharge}>Criar cobrança</button>}</>}
       {relationship?.status === 'pending' && relationship.direction === 'outgoing' && <>
         <span className="invite-status status-pending">Convite enviado · aguardando resposta</span>
         <button className="button button-light" type="button" disabled={busy} onClick={() => void action('cancel')}>Cancelar convite</button>

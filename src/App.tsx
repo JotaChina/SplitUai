@@ -55,9 +55,10 @@ import {
 } from './lib/expenses'
 import { parseSplitwiseCsv, type SplitwiseCsvPreview } from './lib/splitwiseCsv'
 import { listMyFriendships, manageFriendship, searchFriendByUsername, type FriendSearchResult, type FriendshipView } from './lib/friendships'
+import { DirectCharges } from './components/DirectCharges'
 import { ProfileFriendshipActions } from './components/ProfileFriendshipActions'
 
-type Page = 'groups' | 'group' | 'new-group' | 'expense' | 'account' | 'invitations' | 'profile' | 'friends' | 'notifications'
+type Page = 'groups' | 'group' | 'new-group' | 'expense' | 'account' | 'invitations' | 'profile' | 'friends' | 'notifications' | 'charges'
 type InstallPromptEvent = Event & {
   prompt: () => Promise<void>
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>
@@ -195,6 +196,8 @@ function App() {
   const [groupsError, setGroupsError] = useState<string | null>(null)
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
   const [targetNotificationRecordId, setTargetNotificationRecordId] = useState<string | null>(null)
+  const [chargeFriendId, setChargeFriendId] = useState<string | undefined>()
+  const [chargeTargetId, setChargeTargetId] = useState<string | null>(null)
   const [profileUserId, setProfileUserId] = useState<string | null>(null)
   const [editingExpense, setEditingExpense] = useState<ExpenseRecord | null>(null)
   const [myInvitations, setMyInvitations] = useState<MyGroupInvitation[]>([])
@@ -280,6 +283,7 @@ function App() {
       setSelectedGroupId(targetGroup)
       setPage('group')
     } else if (targetTab === 'invitations') setPage('invitations')
+    else if (targetTab === 'charges') { setChargeTargetId(new URLSearchParams(window.location.search).get('charge')); setPage('charges') }
     else if (targetTab === 'friends') setPage('friends')
   }, [session?.user.id])
 
@@ -435,6 +439,7 @@ function App() {
           <button aria-current={page === 'friends' ? 'page' : undefined} className={page === 'friends' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('friends')}>
             <span className="nav-icon" aria-hidden="true">♡</span> Amizades
           </button>
+          <button aria-current={page === 'charges' ? 'page' : undefined} className={page === 'charges' ? 'nav-item active' : 'nav-item'} onClick={() => { setChargeFriendId(undefined); setChargeTargetId(null); setPage('charges') }}><span className="nav-icon" aria-hidden="true">↔</span> Entre amigos</button>
         </nav>
         <div className="sidebar-bottom">
           <div className="help-card"><svg className="help-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 2.5 22 21H2L12 2.5Z" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinejoin="round"/><path d="M8 16.5h8" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg><strong>Dividir fica leve.</strong><p>Organize os gastos e aproveite o que importa.</p></div>
@@ -443,7 +448,7 @@ function App() {
       </aside>
 
       <main className="main-content">
-      <header className="topbar"><a className="mobile-brand" href="#inicio" onClick={(event) => { event.preventDefault(); setPage('groups') }} aria-label="SplitUai — início"><img className="brand-logo" src={brandLogoUrl} alt="" /><span className="brand-name">Split<span>Uai</span></span></a><div className="breadcrumb"><strong>{page === 'account' ? 'Minha conta' : page === 'expense' ? 'Nova despesa' : page === 'profile' ? 'Perfil' : page === 'friends' ? 'Amizades' : page === 'invitations' ? 'Convites recebidos' : page === 'notifications' ? 'Avisos' : page === 'group' ? groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo' : page === 'new-group' ? 'Novo grupo' : 'Meus grupos'}</strong></div><div className="topbar-account">{installPrompt && <button className="install-app-button" type="button" onClick={() => void installApp()}>Instalar app</button>}<button className="sign-out-button" onClick={() => void signOut()} disabled={authBusy}>Sair</button></div></header>
+      <header className="topbar"><a className="mobile-brand" href="#inicio" onClick={(event) => { event.preventDefault(); setPage('groups') }} aria-label="SplitUai — início"><img className="brand-logo" src={brandLogoUrl} alt="" /><span className="brand-name">Split<span>Uai</span></span></a><div className="breadcrumb"><strong>{page === 'account' ? 'Minha conta' : page === 'expense' ? 'Nova despesa' : page === 'profile' ? 'Perfil' : page === 'charges' ? 'Entre amigos' : page === 'friends' ? 'Amizades' : page === 'invitations' ? 'Convites recebidos' : page === 'notifications' ? 'Avisos' : page === 'group' ? groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo' : page === 'new-group' ? 'Novo grupo' : 'Meus grupos'}</strong></div><div className="topbar-account">{installPrompt && <button className="install-app-button" type="button" onClick={() => void installApp()}>Instalar app</button>}<button className="sign-out-button" onClick={() => void signOut()} disabled={authBusy}>Sair</button></div></header>
 
         {page === 'groups' && <Groups groups={groups} loading={groupsLoading} error={groupsError} onRefresh={() => void refreshGroups()} onOpen={(id) => { setSelectedGroupId(id); setPage('group') }} onCreate={() => setPage('new-group')} />}
         {page === 'new-group' && <NewGroup onBack={() => setPage('groups')} onCreate={saveNewGroup} />}
@@ -451,9 +456,10 @@ function App() {
         {page === 'group' && !selectedGroupId && <Groups groups={groups} loading={groupsLoading} error={groupsError} onRefresh={() => void refreshGroups()} onOpen={(id) => { setSelectedGroupId(id); setPage('group') }} onCreate={() => setPage('new-group')} />}
         {page === 'expense' && selectedGroupId && supabase && <Expense client={supabase} groupId={selectedGroupId} groupName={groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo'} userId={session.user.id} expense={editingExpense} onBack={() => { setEditingExpense(null); setPage('group') }} onSaved={() => { setEditingExpense(null); setPage('group') }} />}
         {page === 'account' && supabase && <Account client={supabase} email={session.user.email ?? ''} userId={session.user.id} onProfileChange={setAccountProfile} onSignOut={signOut} busy={authBusy} colorTheme={colorTheme} onColorThemeChange={setColorTheme} darkMode={darkMode} onDarkModeChange={setDarkMode} />}
-        {page === 'profile' && supabase && profileUserId && <UserProfile key={`${session.user.id}:${profileUserId}`} client={supabase} userId={profileUserId} viewerId={session.user.id} onBack={() => setPage(selectedGroupId ? 'group' : 'groups')} onOpenGroup={(id) => { setSelectedGroupId(id); setPage('group') }} />}
+        {page === 'profile' && supabase && profileUserId && <UserProfile key={`${session.user.id}:${profileUserId}`} client={supabase} userId={profileUserId} viewerId={session.user.id} onCharge={() => { setChargeFriendId(profileUserId); setChargeTargetId(null); setPage('charges') }} onBack={() => setPage(selectedGroupId ? 'group' : 'groups')} onOpenGroup={(id) => { setSelectedGroupId(id); setPage('group') }} />}
         {page === 'invitations' && <MyInvitations invitations={myInvitations} onRefresh={() => void refreshMyInvitations()} onAccept={acceptMyInvitation} onDecline={declineMyInvitation} />}
-        {page === 'friends' && supabase && <Friends client={supabase} userId={session.user.id} />}
+        {page === 'charges' && supabase && <DirectCharges key={`${session.user.id}:${chargeFriendId ?? ''}:${chargeTargetId ?? ''}`} client={supabase} userId={session.user.id} initialFriendId={chargeFriendId} targetId={chargeTargetId} />}
+        {page === 'friends' && supabase && <Friends client={supabase} userId={session.user.id} onCharge={(id) => { setChargeFriendId(id); setChargeTargetId(null); setPage('charges') }} />}
         {page === 'notifications' && supabase && <NotificationCenter client={supabase} userId={session.user.id} onOpenGroup={(id, recordId) => { setTargetNotificationRecordId(recordId ?? null); setSelectedGroupId(id); setPage('group') }} />}
       </main>
     </div>
@@ -1225,7 +1231,7 @@ function MyInvitations({ invitations, onRefresh, onAccept, onDecline }: { invita
   return <section className="page-wrap"><div className="eyebrow">ESPAÇO PESSOAL</div><h1>Convites recebidos<span className="heading-dot">.</span></h1><p className="form-intro">Convites enviados para sua conta ou e-mail.</p>{error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}{invitations.length === 0 ? <div className="empty-expenses"><strong>Nenhum convite pendente.</strong><p>Quando alguém convidar você ou o e-mail da sua conta, o convite aparecerá aqui.</p><button className="text-button" onClick={onRefresh}>Atualizar</button></div> : <div className="invitation-list">{invitations.map((invitation) => { const expired = invitation.status === 'expired' || new Date(invitation.expires_at) <= new Date(); return <div className="invitation-row" key={invitation.id}><div><strong>{invitation.group_name}</strong><small>{invitation.invited_email || 'Convite direto para sua conta'} · válido até {new Date(invitation.expires_at).toLocaleDateString('pt-BR')}</small></div><span className={`invite-status status-${expired ? 'expired' : invitation.status}`}>{expired ? 'Expirado' : 'Pendente'}</span><button className="button button-dark" disabled={busy || expired} onClick={() => void accept(invitation.id)}>{busy ? 'Aceitando…' : 'Aceitar convite'}</button><button className="button button-light" disabled={busy || expired} onClick={() => void decline(invitation.id)}>Recusar</button></div> })}</div>}</section>
 }
 
-function Friends({ client, userId }: { client: NonNullable<typeof supabase>; userId: string }) {
+function Friends({ client, userId, onCharge }: { client: NonNullable<typeof supabase>; userId: string; onCharge: (id: string) => void }) {
   const [username, setUsername] = useState('')
   const [result, setResult] = useState<FriendSearchResult | null>(null)
   const [friendships, setFriendships] = useState<FriendshipView[]>([])
@@ -1292,7 +1298,7 @@ function Friends({ client, userId }: { client: NonNullable<typeof supabase>; use
     <div className="section-title"><div><h2>Pedidos enviados</h2><p>{outgoing.length} aguardando resposta</p></div></div>
     {outgoing.length ? <div className="invitation-list">{outgoing.map((row) => <div className="invitation-row" key={row.id}><FriendIdentity row={row} label={label} /><span className="invite-status status-pending">Aguardando</span><button className="button button-light" disabled={busy} onClick={() => void action(row.other_user_id, 'cancel')}>Cancelar pedido</button></div>)}</div> : <div className="empty-expenses"><strong>Nenhum pedido enviado.</strong><p>Pedidos pendentes podem ser cancelados a qualquer momento.</p></div>}
     <div className="section-title"><div><h2>Minhas amizades</h2><p>{friends.length} {friends.length === 1 ? 'pessoa' : 'pessoas'}</p></div></div>
-    {friends.length ? <div className="invitation-list">{friends.map((row) => <div className="invitation-row" key={row.id}><FriendIdentity row={row} label={label} /><span className="role-badge">Amizade</span><button className="button button-light" disabled={busy} onClick={() => void action(row.other_user_id, 'unfriend')}>Desfazer amizade</button></div>)}</div> : <div className="empty-expenses"><strong>{loading ? 'Carregando…' : 'Você ainda não tem amizades.'}</strong><p>Busque uma pessoa pelo username para começar.</p></div>}
+    {friends.length ? <div className="invitation-list">{friends.map((row) => <div className="invitation-row" key={row.id}><FriendIdentity row={row} label={label} /><span className="role-badge">Amizade</span><button className="button button-dark" disabled={busy} onClick={() => onCharge(row.other_user_id)}>Criar cobrança</button><button className="button button-light" disabled={busy} onClick={() => void action(row.other_user_id, 'unfriend')}>Desfazer amizade</button></div>)}</div> : <div className="empty-expenses"><strong>{loading ? 'Carregando…' : 'Você ainda não tem amizades.'}</strong><p>Busque uma pessoa pelo username para começar.</p></div>}
     <p className="friend-invite-note">A amizade não adiciona ninguém a grupos nem aceita convites. Convites de grupo continuam sendo enviados e aceitos separadamente.</p>
   </section>
 }
@@ -1301,10 +1307,11 @@ function FriendIdentity({ row, label }: { row: FriendshipView; label: (person: {
   return <div className="friend-person">{row.avatar_url ? <img className="avatar avatar-photo" src={row.avatar_url} alt="" /> : <span className="avatar avatar-you">{(row.username?.[0] ?? 'U').toUpperCase()}</span>}<div><strong>{label(row)}</strong>{row.display_name && <small>{row.display_name}</small>}</div></div>
 }
 
-function UserProfile({ client, userId, viewerId, onBack, onOpenGroup }: {
+function UserProfile({ client, userId, viewerId, onBack, onOpenGroup, onCharge }: {
   client: NonNullable<typeof supabase>
   userId: string
   viewerId: string
+  onCharge: () => void
   onBack: () => void
   onOpenGroup: (id: string) => void
 }) {
@@ -1368,7 +1375,7 @@ function UserProfile({ client, userId, viewerId, onBack, onOpenGroup }: {
   return <section className="page-wrap profile-page"><button className="back-link" onClick={onBack}>← Voltar</button>
     {loading ? <p className="auth-loading">Carregando perfil…</p> : error ? <p className="auth-error" role="alert">{error}</p> : profile && <>
       <div className="profile-heading"><div className="profile-photo-preview">{profile.avatar_url ? <img src={profile.avatar_url} alt={`Foto de ${displayName}`} /> : (profile.display_name || profile.username || 'P').slice(0, 1).toUpperCase()}</div><div><div className="eyebrow">PERFIL DO PARTICIPANTE</div><h1>{displayName}<span className="heading-dot">.</span></h1>{profile.username && <p>@{profile.username}</p>}</div></div>
-      {userId !== viewerId && <ProfileFriendshipActions key={`${viewerId}:${userId}`} client={client} userId={userId} hasUsername={Boolean(profile.username)} />}
+      {userId !== viewerId && <ProfileFriendshipActions key={`${viewerId}:${userId}`} client={client} userId={userId} hasUsername={Boolean(profile.username)} onCharge={onCharge} />}
       <div className="profile-details-grid"><article className="settlement-panel"><small>NOME</small><strong>{profile.display_name || 'Não informado'}</strong></article><article className="settlement-panel"><small>APELIDO</small><strong>{profile.username ? `@${profile.username}` : 'Não definido'}</strong></article><article className="settlement-panel"><small>CHAVE PIX</small><strong>{profile.pix_key || 'Não informada'}</strong></article></div>
       <div className="section-title"><div><h2>Grupos em comum</h2><p>{sharedGroups.length} {sharedGroups.length === 1 ? 'grupo compartilhado' : 'grupos compartilhados'} com você</p></div></div>
       {sharedGroups.length === 0 ? <div className="empty-expenses"><strong>Nenhum grupo ativo em comum.</strong><p>Os detalhes do perfil ficam disponíveis para pessoas que compartilham um grupo ativo.</p></div> : <div className="profile-groups">{sharedGroups.map((group) => <article className="settlement-panel profile-group" key={group.id}>
@@ -1444,7 +1451,7 @@ function NotificationCenter({ client, userId, onOpenGroup }: { client: NonNullab
     </section>
     <div className="notification-list">{rows.length === 0 ? <div className="empty-state"><strong>Nenhum aviso por enquanto</strong><p>Quando houver uma atualização, ela aparecerá aqui.</p></div> : rows.map((row) => <article className={`notification-row${row.read_at ? '' : ' notification-unread'}`} key={row.id}>
       <div><strong>{row.title}</strong><p>{row.message}</p><time dateTime={row.created_at}>{new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(row.created_at))}</time></div>
-      <div className="notification-actions"><button className="button button-light" type="button" onClick={() => void toggleRead(row)}>{row.read_at ? 'Marcar não lido' : 'Marcar como lido'}</button><button className="button button-dark" type="button" onClick={() => { const target = new URL(row.destination, window.location.origin); const groupId = target.searchParams.get('group'); const tab = target.searchParams.get('tab'); if (groupId) onOpenGroup(groupId, target.searchParams.get('expense') ?? target.searchParams.get('settlement') ?? undefined); else if (tab === 'invitations' || tab === 'friends') window.location.assign(row.destination); }}>Abrir</button></div>
+      <div className="notification-actions"><button className="button button-light" type="button" onClick={() => void toggleRead(row)}>{row.read_at ? 'Marcar não lido' : 'Marcar como lido'}</button><button className="button button-dark" type="button" onClick={() => { const target = new URL(row.destination, window.location.origin); const groupId = target.searchParams.get('group'); const tab = target.searchParams.get('tab'); if (groupId) onOpenGroup(groupId, target.searchParams.get('expense') ?? target.searchParams.get('settlement') ?? undefined); else if (tab === 'invitations' || tab === 'friends' || tab === 'charges') window.location.assign(row.destination); }}>Abrir</button></div>
     </article>)}</div>
     <p className="form-note">O texto do Push é genérico para reduzir a exposição na tela bloqueada. O ícone e a aparência dependem do navegador e do sistema operacional. A entrega em relógios depende do espelhamento e das configurações do telefone e do relógio.</p>
   </section>
@@ -1549,4 +1556,5 @@ function Account({ client, email, userId, onProfileChange, onSignOut, busy, colo
 }
 
 export default App
+
 

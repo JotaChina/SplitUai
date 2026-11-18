@@ -26,6 +26,20 @@ Os testes SQL usam um esquema mínimo de suporte a Auth/Storage/avisos; não sub
 
 Projeto alvo: `yzxeyqutmvjmrglmpcbb` (São Paulo). Frontend: GitHub Pages, branch `main`.
 
+### Pelo GitHub Actions
+
+O job `Verify Supabase credential (read only)` testa o Secret com uma consulta de metadados, após a validação da branch. Ele não aplica migrations nem consulta cobranças ou dados pessoais. A alteração de produção continua restrita ao workflow manual descrito abaixo.
+
+No Supabase, gerar um Personal Access Token limitado **somente ao projeto SplitUai**, com a permissão **Database: Read-write** e prazo curto de validade. Essa permissão permite executar SQL administrativo; não usar um token legado com acesso à conta inteira. Não compartilhar o token em chat ou no código.
+
+No repositório GitHub: **Settings → Environments → SplitUai → Environment secrets → Add secret**. Nome: `SUPABASE_ACCESS_TOKEN`. Valor: o token pessoal do Supabase (não a chave pública nem `service_role`).
+
+A proposta de publicação usa o workflow manual `Deploy direct charges database`, com confirmação explícita do identificador do projeto. Ele não executa em push nem pull request. O script valida o projeto alvo, guarda metadados do esquema anterior, executa somente a migração desta entrega em uma transação, registra-a no histórico e confere RLS, RPCs e bucket privado. Se a migração já estiver aplicada, apenas confere sua estrutura. A publicação deste workflow está pendente de autorização específica do responsável pelo projeto.
+
+O token não é fornecido ao build do frontend e não é usado para aplicar o banco em eventos de pull request. O site só deve ser publicado após o sucesso desse job. Revogar o token após concluir a entrega se não houver intenção de mantê-lo para novas atualizações. Proteger os workflows e limitar quais branches podem usar o Environment é necessário: quem consegue modificar um workflow autorizado pode usar seus Secrets.
+
+### Alternativa: SQL Editor autenticado
+
 1. Conferir o projeto alvo e guardar um backup de esquema pelos meios administrativos existentes.
 2. No SQL Editor autenticado do projeto alvo, aplicar **somente** `supabase/migrations/20261118000200_direct_charges.sql`, dentro de uma transação. Não executar `db push` com todas as migrations locais: a migração `20261118000100_reliable_push.sql` é de outra entrega.
 3. Na mesma transação, registrar a migração no controle existente:

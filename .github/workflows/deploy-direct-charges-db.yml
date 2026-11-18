@@ -1,0 +1,39 @@
+name: Deploy direct charges database
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_project:
+        description: 'Confirm production project: yzxeyqutmvjmrglmpcbb'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: direct-charges-database
+  cancel-in-progress: false
+jobs:
+  migrate:
+    if: inputs.confirm_project == 'yzxeyqutmvjmrglmpcbb'
+    runs-on: ubuntu-latest
+    environment: SplitUai
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Check deployment safeguards
+        run: node --test scripts/deploy-direct-charges.test.mjs
+      - name: Apply and verify only the direct charges migration
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          DIRECT_CHARGES_BACKUP_PATH: ${{ runner.temp }}/direct-charges-preflight.json
+        run: node scripts/deploy-direct-charges.mjs
+      - name: Save pre-deployment schema metadata
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: direct-charges-schema-before
+          path: ${{ runner.temp }}/direct-charges-preflight.json
+          retention-days: 7
+          if-no-files-found: ignore

@@ -1,12 +1,15 @@
 -- Only for an empty disposable CI PostgreSQL database, never production.
 do $$ begin
-  if current_database() <> 'charges_ci' then raise exception 'Test fixture requires charges_ci'; end if;
+  if current_database() not in ('charges_ci','charges_deploy_ci') then raise exception 'Test fixture requires a disposable charge test database'; end if;
 end $$;
-create role anon nologin;
-create role authenticated nologin;
+do $$ begin
+  if not exists(select 1 from pg_roles where rolname='anon') then create role anon nologin; end if;
+  if not exists(select 1 from pg_roles where rolname='authenticated') then create role authenticated nologin; end if;
+end $$;
 create schema auth;
 create schema storage;
 create schema private;
+create publication supabase_realtime;
 create function auth.uid() returns uuid language sql stable as $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
 grant usage on schema auth,storage,public to authenticated,anon;
 grant execute on function auth.uid() to authenticated,anon;

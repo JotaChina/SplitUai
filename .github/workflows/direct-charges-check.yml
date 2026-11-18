@@ -31,6 +31,9 @@ jobs:
           cache: npm
       - run: npm ci
       - run: node --test scripts/direct-charges.test.mjs
+      - run: node --test scripts/deploy-direct-charges.test.mjs
+        env:
+          DIRECT_CHARGES_TEST_SQL_PATH: ${{ runner.temp }}/direct-charges-transaction.sql
       - name: PostgreSQL authorization and lifecycle tests
         env:
           PGPASSWORD: local-test-only
@@ -38,17 +41,30 @@ jobs:
           psql -h localhost -U postgres -d charges_ci -v ON_ERROR_STOP=1 -f scripts/direct-charges-fixture.sql
           psql -h localhost -U postgres -d charges_ci -v ON_ERROR_STOP=1 -f supabase/migrations/20261118000200_direct_charges.sql
           psql -h localhost -U postgres -d charges_ci -v ON_ERROR_STOP=1 -f scripts/direct-charges-security.sql
+          createdb -h localhost -U postgres charges_deploy_ci
+          psql -h localhost -U postgres -d charges_deploy_ci -v ON_ERROR_STOP=1 -f scripts/direct-charges-fixture.sql
+          psql -h localhost -U postgres -d charges_deploy_ci -v ON_ERROR_STOP=1 -c 'create schema supabase_migrations; create table supabase_migrations.schema_migrations(version text primary key,name text,statements text[]);'
+          psql -h localhost -U postgres -d charges_deploy_ci -v ON_ERROR_STOP=1 -f "${{ runner.temp }}/direct-charges-transaction.sql"
+          psql -h localhost -U postgres -d charges_deploy_ci -v ON_ERROR_STOP=1 -f "${{ runner.temp }}/direct-charges-transaction.sql"
+          psql -h localhost -U postgres -d charges_deploy_ci -v ON_ERROR_STOP=1 -c "do \$\$ begin if (select count(*) from supabase_migrations.schema_migrations where version='20261118000200')<>1 then raise exception 'Migration ledger mismatch'; end if; end \$\$;"
       - run: npm run build
         env:
           VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
           VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
           VITE_VAPID_PUBLIC_KEY: ${{ vars.VITE_VAPID_PUBLIC_KEY }}
-      - name: Check backend deployment access
+  verify-credential:
+    name: Verify Supabase credential (read only)
+    needs: validate
+    if: github.event_name == 'push' && github.ref == 'refs/heads/feat/direct-charges'
+    runs-on: ubuntu-latest
+    environment: SplitUai
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Test scoped credential without applying migrations
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-        run: |
-          if [ -n "$SUPABASE_ACCESS_TOKEN" ]; then
-            echo "Supabase deployment credential is configured."
-          else
-            echo "::warning::SUPABASE_ACCESS_TOKEN is missing in Environment SplitUai. Backend deployment needs this credential."
-          fi
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+        run: node scripts/deploy-direct-charges.mjs --check

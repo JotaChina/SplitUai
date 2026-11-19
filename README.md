@@ -92,9 +92,11 @@ Os valores são tratados em **centavos**, com regras de arredondamento para mant
 - O formulário de acerto sugere o valor para quitar a dívida e permite pagamentos parciais.
 - No histórico importado do Splitwise, despesas e pagamentos permanecem em registros separados.
 
-## Em desenvolvimento
+## Cobranças e despesas entre amigos
 
-**Cobranças diretas entre amizades aceitas, sem criar um grupo:** esta cópia do projeto já contém uma migration, funções de acesso e componentes para esse fluxo. A integração com a navegação principal ainda está pendente, portanto o recurso não é apresentado aqui como disponível na interface atual.
+**Cobranças diretas entre amizades aceitas, sem criar um grupo**, disponíveis na opção **Entre amigos**. Despesas podem ser divididas igualmente, por percentual ou por valor personalizado, com categoria, data e observações. O resumo mensal mostra a parte pessoal por categoria e amizade. Cada pessoa pode abrir o perfil da outra nas listas de amizades e cobranças.
+
+O fluxo inclui reconhecimento ou contestação, informação de pagamento, comprovante privado e confirmação de recebimento. Cobranças avulsas não entram no resumo de despesas pessoais.
 
 As funcionalidades descritas neste README refletem o código local. A disponibilidade no site depende da versão publicada e da configuração do backend.
 

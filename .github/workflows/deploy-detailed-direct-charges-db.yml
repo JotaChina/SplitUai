@@ -1,0 +1,28 @@
+name: Deploy detailed direct expenses database
+on:
+  workflow_dispatch:
+    inputs:
+      confirm_project:
+        description: 'Confirm project yzxeyqutmvjmrglmpcbb'
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: direct-charges-database
+  cancel-in-progress: false
+jobs:
+  migrate:
+    if: inputs.confirm_project == 'yzxeyqutmvjmrglmpcbb'
+    runs-on: ubuntu-latest
+    environment: SplitUai
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - name: Apply and verify detailed direct expenses migration
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+        run: node scripts/deploy-detailed-direct-charges.mjs

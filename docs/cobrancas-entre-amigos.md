@@ -64,3 +64,16 @@ select version from supabase_migrations.schema_migrations where version='2026111
 6. Validar com duas contas autorizadas: criar cobrança, reconhecer, informar pagamento e confirmar recebimento; conferir que terceiros não conseguem consultar a cobrança. Comprovar Push em dispositivos reais depende das inscrições já configuradas.
 
 Se o banco ainda não tiver sido aplicado, não publicar a interface no `main`. Reverter o frontend mantém os registros e comprovantes; não apagar tabelas ou documentos como rollback.
+
+
+## Despesas detalhadas entre amigos
+
+A migração `20261118000300_detailed_direct_charges.sql` depende da `20261118000200_direct_charges.sql`. Aplicar e validar o banco antes de publicar a nova interface. O script `deploy-direct-charges.mjs` existente aplica somente a migração 002; executá-lo não aplica esta evolução. Nenhuma publicação faz parte desta alteração local.
+
+- Perfis acessíveis nas amizades aceitas e pedidos pendentes; o perfil social exibe somente nome, username e foto. A chave Pix continua seguindo os acessos anteriores de grupos/cobranças.
+- Despesas entre duas pessoas: quem cria pagou o total. Rateios igual, por percentual (duas casas decimais) ou valor da outra pessoa. Total e parcelas são persistidos em centavos. No igual, o centavo excedente fica com quem pagou; no percentual, a parte do devedor é arredondada ao centavo e o restante fica com quem pagou.
+- Categoria compartilhada com grupos, data da despesa, observações e vencimento independente. Para corrigir dados, cancelar a cobrança e criar outra; o histórico anterior permanece.
+- Gráfico mensal por categoria e amizade considera a parte pessoal nas despesas reconhecidas, com pagamento informado ou quitadas. Exclui pendentes, contestadas, canceladas e cobranças avulsas sem despesa. Pagamentos não adicionam gastos. Não agrega grupos nem despesas exclusivamente pessoais nesta versão.
+- Despesas antigas com total preservam o rateio igual; recebem categoria Outros e data da criação em São Paulo. Cobranças antigas sem total continuam fora dos gráficos. A RPC antiga permanece compatível.
+
+Validação: `node scripts/direct-charges.test.mjs` e `npm run build`. O workflow de validação aplica ambas as migrações em banco descartável e executa testes de autorização e rateio em `scripts/direct-charges-detailed.sql`. Não executar fixtures em produção.

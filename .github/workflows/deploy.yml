@@ -42,6 +42,8 @@ jobs:
         run: |
           test -n "$VITE_SUPABASE_URL" || { echo "Missing GitHub Actions variable VITE_SUPABASE_URL"; exit 1; }
           test -n "$VITE_SUPABASE_PUBLISHABLE_KEY" || { echo "Missing GitHub Actions variable VITE_SUPABASE_PUBLISHABLE_KEY"; exit 1; }
+          test -n "$VITE_VAPID_PUBLIC_KEY" || { echo "Missing GitHub Actions variable VITE_VAPID_PUBLIC_KEY"; exit 1; }
+          npm run test:notifications
           npm run build
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5

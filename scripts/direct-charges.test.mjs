@@ -44,3 +44,33 @@ test('Receipts use a private bucket, immutable unique paths and expiring signed 
   assert.equal(calls[0][2].upsert,false)
   assert.equal(await api.receiptUrl(client,path),`https://example.test/${path}`)
 })
+
+test('Detailed shares preserve cents and reject invalid allocations', () => {
+  assert.equal(api.calculateDirectSplit(8001, 'equal').debtor, 4000)
+  assert.equal(api.calculateDirectSplit(8001, 'equal').creditor, 4001)
+  assert.equal(api.calculateDirectSplit(8001, 'percentage', 3000).debtor, 2400)
+  assert.equal(api.calculateDirectSplit(101, 'percentage', 5000).debtor, 51)
+  assert.equal(api.calculateDirectSplit(8001, 'custom', 2000).creditor, 6001)
+  assert.equal(api.calculateDirectSplit(1, 'custom', 1).creditor, 0)
+  for (const [total, mode, value] of [[100,'custom',101],[100,'custom',0],[100,'custom',1.5],[100,'percentage',10001],[100,'percentage',NaN],[1,'equal',0],[200000001,'equal',0],[100000001,'charge',0]]) {
+    assert.throws(() => api.calculateDirectSplit(total, mode, value))
+  }
+})
+test('Personal spending counts shares once, excludes transfers and filters month and friend', () => {
+  const row = { creditor_id:'me', debtor_id:'friend', total_cents:8001, amount_cents:4000, category:'alimentacao', expense_date:'2026-11-18', status:'paid' }
+  const rows = [row, ...['pending','disputed','cancelled'].map(status => ({...row,status})), {...row,total_cents:null}, {...row,expense_date:'2026-10-18'}]
+  assert.equal(api.personalDirectSpending(rows,'me','2026-11').reduce((s,r)=>s+r.cents,0),4001)
+  assert.equal(api.personalDirectSpending(rows,'friend','2026-11').reduce((s,r)=>s+r.cents,0),4000)
+  assert.equal(api.personalDirectSpending(rows,'me','2026-11','other').length,0)
+  for (const status of ['accepted','payment_reported','paid']) assert.equal(api.personalDirectSpending([{...row,status}],'me','2026-11','friend')[0].cents,4001)
+})
+test('Detailed RPC persists category, date, notes and percentage basis points', async () => {
+  let args
+  const client={rpc:async (name,input)=>{assert.equal(name,'create_detailed_direct_charge');args=input;return {error:null}}}
+  await api.createDetailedDirectCharge(client,{id:'id',friendId:'friend',description:' Jantar ',total:8001,mode:'percentage',value:3000,category:'alimentacao',expenseDate:'2026-11-18',notes:' Detalhes ',dueDate:''})
+  assert.equal(args.p_amount_cents,2400)
+  assert.equal(args.p_total_cents,8001)
+  assert.equal(args.p_debtor_percentage,3000)
+  assert.equal(args.p_notes,'Detalhes')
+  assert.equal(args.p_expense_date,'2026-11-18')
+})

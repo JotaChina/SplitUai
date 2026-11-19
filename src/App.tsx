@@ -1,6 +1,9 @@
+import { categoryLabels } from './lib/expenseCategories'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import { supabase } from './lib/supabase'
+import { useNotifications } from './lib/useNotifications'
+import { detachDevice, useDevicePush } from './lib/useDevicePush'
 import {
   createGroup,
   createGroupInvitation,
@@ -68,7 +71,7 @@ type ChartCategory = ExpenseCategory | 'contas_da_casa' | 'transporte_grupo'
 type GroupImageFocus = { x: number; y: number }
 const houseBillCategories: ExpenseCategory[] = ['aluguel', 'luz', 'agua', 'iptu', 'internet']
 const transportCategories: ExpenseCategory[] = ['transporte_gasolina', 'transporte_aluguel_veiculo', 'transporte_onibus', 'transporte_aviao', 'transporte_corrida_app', 'transporte_pedagio', 'transporte_multas', 'transporte_ipva', 'transporte_manutencao']
-const categoryLabels: Record<ExpenseCategory, string> = { alimentacao: 'Alimentação', hospedagem: 'Hospedagem', transporte: 'Transporte', corrida: 'Corrida', atividades: 'Atividades', outros: 'Outros', aluguel: 'Aluguel', luz: 'Luz', agua: 'Água', iptu: 'IPTU', internet: 'Internet', viagens: 'Viagens', streaming: 'Streaming', fitness: 'Fitness', fatura_cartao: 'Fatura de cartão', acerto_outros_grupos: 'Acerto de outros grupos', transporte_gasolina: 'Gasolina', transporte_aluguel_veiculo: 'Aluguel de veículo', transporte_onibus: 'Ônibus', transporte_aviao: 'Avião', transporte_corrida_app: 'Corrida de app', transporte_pedagio: 'Pedágio', transporte_multas: 'Multas', transporte_ipva: 'IPVA', transporte_manutencao: 'Manutenção' }
+
 const categoryEmojis: Record<ExpenseCategory, string> = { alimentacao: '🍴', hospedagem: '🏡', transporte: '🚗', corrida: '🍁', atividades: '🎟️', outros: '✳', aluguel: '🏠', luz: '💡', agua: '💧', iptu: '🏛️', internet: '🌐', viagens: '🧳', streaming: '📺', fitness: '🏋️', fatura_cartao: '💳', acerto_outros_grupos: '↔️', transporte_gasolina: '⛽', transporte_aluguel_veiculo: '🚙', transporte_onibus: '🚌', transporte_aviao: '✈️', transporte_corrida_app: '🚕', transporte_pedagio: '🛣️', transporte_multas: '🚨', transporte_ipva: '📄', transporte_manutencao: '🔧' }
 const chartCategoryLabels: Record<ChartCategory, string> = { ...categoryLabels, contas_da_casa: 'Contas da Casa', transporte_grupo: 'Transporte' }
 const settlementPaymentLabels: Record<SettlementPaymentMethod, string> = {
@@ -198,11 +201,14 @@ function App() {
   const [targetNotificationRecordId, setTargetNotificationRecordId] = useState<string | null>(null)
   const [chargeFriendId, setChargeFriendId] = useState<string | undefined>()
   const [chargeTargetId, setChargeTargetId] = useState<string | null>(null)
+  const [profileReturnPage, setProfileReturnPage] = useState<Page>('groups')
   const [profileUserId, setProfileUserId] = useState<string | null>(null)
   const [editingExpense, setEditingExpense] = useState<ExpenseRecord | null>(null)
   const [myInvitations, setMyInvitations] = useState<MyGroupInvitation[]>([])
   const [accountProfile, setAccountProfile] = useState<GroupProfileRecord | null>(null)
-  const [unreadNotifications, setUnreadNotifications] = useState(0)
+  const inbox = useNotifications(supabase, session?.user.id)
+  const unreadNotifications = inbox.unread
+  const devicePush = useDevicePush(supabase, session?.user.id)
   const [installPrompt, setInstallPrompt] = useState<InstallPromptEvent | null>(null)
   const hadSession = useRef(false)
 
@@ -285,6 +291,7 @@ function App() {
     } else if (targetTab === 'invitations') setPage('invitations')
     else if (targetTab === 'charges') { setChargeTargetId(new URLSearchParams(window.location.search).get('charge')); setPage('charges') }
     else if (targetTab === 'friends') setPage('friends')
+    else if (targetTab === 'notifications') setPage('notifications')
   }, [session?.user.id])
 
   useEffect(() => {
@@ -312,18 +319,6 @@ function App() {
     await installPrompt.userChoice
     setInstallPrompt(null)
   }
-
-  useEffect(() => {
-    if (!supabase || !session) { setUnreadNotifications(0); return }
-    let active = true
-    const refresh = async () => {
-      const { count } = await supabase!.from('notifications').select('id', { count: 'exact', head: true }).is('read_at', null)
-      if (active) setUnreadNotifications(count ?? 0)
-    }
-    void refresh()
-    const channel = supabase.channel(`notifications:${session.user.id}`).on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${session.user.id}` }, () => void refresh()).subscribe()
-    return () => { active = false; void supabase!.removeChannel(channel) }
-  }, [session?.user.id])
 
   async function refreshMyInvitations() {
     if (supabase) setMyInvitations(await listMyGroupInvitations(supabase))
@@ -371,6 +366,8 @@ function App() {
   async function signOut() {
     if (!supabase) return
     setAuthBusy(true)
+    try { await detachDevice(supabase, session?.user.id) }
+    catch (error) { setAuthError(error instanceof Error ? error.message : 'Não foi possível desvincular o Push.'); setAuthBusy(false); return }
     const { error } = await supabase.auth.signOut()
     setAuthError(error?.message ?? null)
     setPasswordSetupMode(null)
@@ -434,7 +431,7 @@ function App() {
             <span className="nav-icon" aria-hidden="true">✉</span> Convites recebidos{myInvitations.length > 0 ? ` · ${myInvitations.length}` : ''}
           </button>
           <button aria-current={page === 'notifications' ? 'page' : undefined} className={page === 'notifications' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('notifications')}>
-            <span className="nav-icon" aria-hidden="true">♢</span> Avisos{unreadNotifications > 0 ? ` · ${unreadNotifications}` : ''}
+            <span className="nav-icon" aria-hidden="true">♢</span> Avisos{unreadNotifications !== null && unreadNotifications > 0 ? ` · ${unreadNotifications}` : ''}
           </button>
           <button aria-current={page === 'friends' ? 'page' : undefined} className={page === 'friends' ? 'nav-item active' : 'nav-item'} onClick={() => setPage('friends')}>
             <span className="nav-icon" aria-hidden="true">♡</span> Amizades
@@ -448,19 +445,21 @@ function App() {
       </aside>
 
       <main className="main-content">
+        {authError && <p className="auth-error" role="alert">{authError}</p>}
+        {inbox.error && <p className="auth-error" role="status">{inbox.error}</p>}
       <header className="topbar"><a className="mobile-brand" href="#inicio" onClick={(event) => { event.preventDefault(); setPage('groups') }} aria-label="SplitUai — início"><img className="brand-logo" src={brandLogoUrl} alt="" /><span className="brand-name">Split<span>Uai</span></span></a><div className="breadcrumb"><strong>{page === 'account' ? 'Minha conta' : page === 'expense' ? 'Nova despesa' : page === 'profile' ? 'Perfil' : page === 'charges' ? 'Entre amigos' : page === 'friends' ? 'Amizades' : page === 'invitations' ? 'Convites recebidos' : page === 'notifications' ? 'Avisos' : page === 'group' ? groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo' : page === 'new-group' ? 'Novo grupo' : 'Meus grupos'}</strong></div><div className="topbar-account">{installPrompt && <button className="install-app-button" type="button" onClick={() => void installApp()}>Instalar app</button>}<button className="sign-out-button" onClick={() => void signOut()} disabled={authBusy}>Sair</button></div></header>
 
         {page === 'groups' && <Groups groups={groups} loading={groupsLoading} error={groupsError} onRefresh={() => void refreshGroups()} onOpen={(id) => { setSelectedGroupId(id); setPage('group') }} onCreate={() => setPage('new-group')} />}
         {page === 'new-group' && <NewGroup onBack={() => setPage('groups')} onCreate={saveNewGroup} />}
-        {page === 'group' && selectedGroupId && supabase && <Group key={selectedGroupId} client={supabase} groupId={selectedGroupId} targetRecordId={targetNotificationRecordId} userId={session.user.id} onBack={() => { void refreshGroups(); setPage('groups') }} onAddExpense={() => { setEditingExpense(null); setPage('expense') }} onEditExpense={(expense) => { setEditingExpense(expense); setPage('expense') }} onOpenProfile={(id) => { setProfileUserId(id); setPage('profile') }} />}
+        {page === 'group' && selectedGroupId && supabase && <Group key={selectedGroupId} client={supabase} groupId={selectedGroupId} targetRecordId={targetNotificationRecordId} userId={session.user.id} onBack={() => { void refreshGroups(); setPage('groups') }} onAddExpense={() => { setEditingExpense(null); setPage('expense') }} onEditExpense={(expense) => { setEditingExpense(expense); setPage('expense') }} onOpenProfile={(id) => { setProfileReturnPage(page); setProfileUserId(id); setPage('profile') }} />}
         {page === 'group' && !selectedGroupId && <Groups groups={groups} loading={groupsLoading} error={groupsError} onRefresh={() => void refreshGroups()} onOpen={(id) => { setSelectedGroupId(id); setPage('group') }} onCreate={() => setPage('new-group')} />}
         {page === 'expense' && selectedGroupId && supabase && <Expense client={supabase} groupId={selectedGroupId} groupName={groups.find((group) => group.id === selectedGroupId)?.name ?? 'Grupo'} userId={session.user.id} expense={editingExpense} onBack={() => { setEditingExpense(null); setPage('group') }} onSaved={() => { setEditingExpense(null); setPage('group') }} />}
         {page === 'account' && supabase && <Account client={supabase} email={session.user.email ?? ''} userId={session.user.id} onProfileChange={setAccountProfile} onSignOut={signOut} busy={authBusy} colorTheme={colorTheme} onColorThemeChange={setColorTheme} darkMode={darkMode} onDarkModeChange={setDarkMode} />}
-        {page === 'profile' && supabase && profileUserId && <UserProfile key={`${session.user.id}:${profileUserId}`} client={supabase} userId={profileUserId} viewerId={session.user.id} onCharge={() => { setChargeFriendId(profileUserId); setChargeTargetId(null); setPage('charges') }} onBack={() => setPage(selectedGroupId ? 'group' : 'groups')} onOpenGroup={(id) => { setSelectedGroupId(id); setPage('group') }} />}
+        {page === 'profile' && supabase && profileUserId && <UserProfile key={`${session.user.id}:${profileUserId}`} client={supabase} userId={profileUserId} viewerId={session.user.id} onCharge={() => { setChargeFriendId(profileUserId); setChargeTargetId(null); setPage('charges') }} onBack={() => setPage(profileReturnPage)} onOpenGroup={(id) => { setSelectedGroupId(id); setPage('group') }} />}
         {page === 'invitations' && <MyInvitations invitations={myInvitations} onRefresh={() => void refreshMyInvitations()} onAccept={acceptMyInvitation} onDecline={declineMyInvitation} />}
-        {page === 'charges' && supabase && <DirectCharges key={`${session.user.id}:${chargeFriendId ?? ''}:${chargeTargetId ?? ''}`} client={supabase} userId={session.user.id} initialFriendId={chargeFriendId} targetId={chargeTargetId} />}
-        {page === 'friends' && supabase && <Friends client={supabase} userId={session.user.id} onCharge={(id) => { setChargeFriendId(id); setChargeTargetId(null); setPage('charges') }} />}
-        {page === 'notifications' && supabase && <NotificationCenter client={supabase} userId={session.user.id} onOpenGroup={(id, recordId) => { setTargetNotificationRecordId(recordId ?? null); setSelectedGroupId(id); setPage('group') }} />}
+        {page === 'charges' && supabase && <DirectCharges onOpenProfile={(id) => { setProfileReturnPage(page); setProfileUserId(id); setPage('profile') }} key={`${session.user.id}:${chargeFriendId ?? ''}:${chargeTargetId ?? ''}`} client={supabase} userId={session.user.id} initialFriendId={chargeFriendId} targetId={chargeTargetId} />}
+        {page === 'friends' && supabase && <Friends onOpenProfile={(id) => { setProfileReturnPage(page); setProfileUserId(id); setPage('profile') }} client={supabase} userId={session.user.id} onCharge={(id) => { setChargeFriendId(id); setChargeTargetId(null); setPage('charges') }} />}
+        {page === 'notifications' && supabase && <NotificationCenter client={supabase} inbox={inbox} devicePush={devicePush} onOpenGroup={(id, recordId) => { setTargetNotificationRecordId(recordId ?? null); setSelectedGroupId(id); setPage('group') }} />}
       </main>
     </div>
   )
@@ -1231,7 +1230,7 @@ function MyInvitations({ invitations, onRefresh, onAccept, onDecline }: { invita
   return <section className="page-wrap"><div className="eyebrow">ESPAÇO PESSOAL</div><h1>Convites recebidos<span className="heading-dot">.</span></h1><p className="form-intro">Convites enviados para sua conta ou e-mail.</p>{error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}{invitations.length === 0 ? <div className="empty-expenses"><strong>Nenhum convite pendente.</strong><p>Quando alguém convidar você ou o e-mail da sua conta, o convite aparecerá aqui.</p><button className="text-button" onClick={onRefresh}>Atualizar</button></div> : <div className="invitation-list">{invitations.map((invitation) => { const expired = invitation.status === 'expired' || new Date(invitation.expires_at) <= new Date(); return <div className="invitation-row" key={invitation.id}><div><strong>{invitation.group_name}</strong><small>{invitation.invited_email || 'Convite direto para sua conta'} · válido até {new Date(invitation.expires_at).toLocaleDateString('pt-BR')}</small></div><span className={`invite-status status-${expired ? 'expired' : invitation.status}`}>{expired ? 'Expirado' : 'Pendente'}</span><button className="button button-dark" disabled={busy || expired} onClick={() => void accept(invitation.id)}>{busy ? 'Aceitando…' : 'Aceitar convite'}</button><button className="button button-light" disabled={busy || expired} onClick={() => void decline(invitation.id)}>Recusar</button></div> })}</div>}</section>
 }
 
-function Friends({ client, userId, onCharge }: { client: NonNullable<typeof supabase>; userId: string; onCharge: (id: string) => void }) {
+function Friends({ client, userId, onCharge, onOpenProfile }: { onOpenProfile: (id: string) => void; client: NonNullable<typeof supabase>; userId: string; onCharge: (id: string) => void }) {
   const [username, setUsername] = useState('')
   const [result, setResult] = useState<FriendSearchResult | null>(null)
   const [friendships, setFriendships] = useState<FriendshipView[]>([])
@@ -1287,24 +1286,24 @@ function Friends({ client, userId, onCharge }: { client: NonNullable<typeof supa
       <small>Busca exata, com limite de tentativas para proteger os perfis.</small>
     </form>
     {error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}
-    {result && <div className="friend-result"><div className="friend-person">{result.avatar_url ? <img className="avatar avatar-photo" src={result.avatar_url} alt="" /> : <span className="avatar avatar-you">{(result.username?.[0] ?? 'U').toUpperCase()}</span>}<div><strong>{label(result)}</strong>{result.display_name && <small>{result.display_name}</small>}</div></div>
+    {result && <div className="friend-result"><div className="friend-person">{result.avatar_url ? <img className="avatar avatar-photo" src={result.avatar_url} alt="" /> : <span className="avatar avatar-you">{(result.username?.[0] ?? 'U').toUpperCase()}</span>}<div>{result.relationship_status === 'pending' || result.relationship_status === 'accepted' ? <button type="button" className="profile-link" onClick={() => onOpenProfile(result.user_id)} title="Abrir perfil">{label(result)}</button> : <strong>{label(result)}</strong>}{result.display_name && <small>{result.display_name}</small>}</div></div>
       {!result.relationship_status && <button className="button button-dark" disabled={busy} onClick={() => void action(result.user_id, 'send')}>Enviar pedido</button>}
       {result.relationship_status === 'accepted' && <span className="role-badge">Amizade</span>}
       {result.relationship_status === 'pending' && result.request_direction === 'outgoing' && <><span className="invite-status status-pending">Pedido enviado</span><button className="button button-light" disabled={busy} onClick={() => void action(result.user_id, 'cancel')}>Cancelar</button></>}
       {result.relationship_status === 'pending' && result.request_direction === 'incoming' && <><button className="button button-dark" disabled={busy} onClick={() => void action(result.user_id, 'accept')}>Aceitar</button><button className="button button-light" disabled={busy} onClick={() => void action(result.user_id, 'decline')}>Recusar</button></>}
     </div>}
     <div className="section-title"><div><h2>Pedidos recebidos</h2><p>{incoming.length} pendente{incoming.length === 1 ? '' : 's'}</p></div></div>
-    {incoming.length ? <div className="invitation-list">{incoming.map((row) => <div className="invitation-row" key={row.id}><FriendIdentity row={row} label={label} /><button className="button button-dark" disabled={busy} onClick={() => void action(row.other_user_id, 'accept')}>Aceitar</button><button className="button button-light" disabled={busy} onClick={() => void action(row.other_user_id, 'decline')}>Recusar</button></div>)}</div> : <div className="empty-expenses"><strong>{loading ? 'Carregando…' : 'Nenhum pedido recebido.'}</strong><p>Pedidos que outras pessoas enviarem aparecerão aqui.</p></div>}
+    {incoming.length ? <div className="invitation-list">{incoming.map((row) => <div className="invitation-row" key={row.id}><FriendIdentity row={row} label={label} onOpenProfile={onOpenProfile} /><button className="button button-dark" disabled={busy} onClick={() => void action(row.other_user_id, 'accept')}>Aceitar</button><button className="button button-light" disabled={busy} onClick={() => void action(row.other_user_id, 'decline')}>Recusar</button></div>)}</div> : <div className="empty-expenses"><strong>{loading ? 'Carregando…' : 'Nenhum pedido recebido.'}</strong><p>Pedidos que outras pessoas enviarem aparecerão aqui.</p></div>}
     <div className="section-title"><div><h2>Pedidos enviados</h2><p>{outgoing.length} aguardando resposta</p></div></div>
-    {outgoing.length ? <div className="invitation-list">{outgoing.map((row) => <div className="invitation-row" key={row.id}><FriendIdentity row={row} label={label} /><span className="invite-status status-pending">Aguardando</span><button className="button button-light" disabled={busy} onClick={() => void action(row.other_user_id, 'cancel')}>Cancelar pedido</button></div>)}</div> : <div className="empty-expenses"><strong>Nenhum pedido enviado.</strong><p>Pedidos pendentes podem ser cancelados a qualquer momento.</p></div>}
+    {outgoing.length ? <div className="invitation-list">{outgoing.map((row) => <div className="invitation-row" key={row.id}><FriendIdentity row={row} label={label} onOpenProfile={onOpenProfile} /><span className="invite-status status-pending">Aguardando</span><button className="button button-light" disabled={busy} onClick={() => void action(row.other_user_id, 'cancel')}>Cancelar pedido</button></div>)}</div> : <div className="empty-expenses"><strong>Nenhum pedido enviado.</strong><p>Pedidos pendentes podem ser cancelados a qualquer momento.</p></div>}
     <div className="section-title"><div><h2>Minhas amizades</h2><p>{friends.length} {friends.length === 1 ? 'pessoa' : 'pessoas'}</p></div></div>
-    {friends.length ? <div className="invitation-list">{friends.map((row) => <div className="invitation-row" key={row.id}><FriendIdentity row={row} label={label} /><span className="role-badge">Amizade</span><button className="button button-dark" disabled={busy} onClick={() => onCharge(row.other_user_id)}>Criar cobrança</button><button className="button button-light" disabled={busy} onClick={() => void action(row.other_user_id, 'unfriend')}>Desfazer amizade</button></div>)}</div> : <div className="empty-expenses"><strong>{loading ? 'Carregando…' : 'Você ainda não tem amizades.'}</strong><p>Busque uma pessoa pelo username para começar.</p></div>}
+    {friends.length ? <div className="invitation-list">{friends.map((row) => <div className="invitation-row" key={row.id}><FriendIdentity row={row} label={label} onOpenProfile={onOpenProfile} /><span className="role-badge">Amizade</span><button className="button button-dark" disabled={busy} onClick={() => onCharge(row.other_user_id)}>Criar cobrança</button><button className="button button-light" disabled={busy} onClick={() => void action(row.other_user_id, 'unfriend')}>Desfazer amizade</button></div>)}</div> : <div className="empty-expenses"><strong>{loading ? 'Carregando…' : 'Você ainda não tem amizades.'}</strong><p>Busque uma pessoa pelo username para começar.</p></div>}
     <p className="friend-invite-note">A amizade não adiciona ninguém a grupos nem aceita convites. Convites de grupo continuam sendo enviados e aceitos separadamente.</p>
   </section>
 }
 
-function FriendIdentity({ row, label }: { row: FriendshipView; label: (person: { username: string | null; display_name: string | null }) => string }) {
-  return <div className="friend-person">{row.avatar_url ? <img className="avatar avatar-photo" src={row.avatar_url} alt="" /> : <span className="avatar avatar-you">{(row.username?.[0] ?? 'U').toUpperCase()}</span>}<div><strong>{label(row)}</strong>{row.display_name && <small>{row.display_name}</small>}</div></div>
+function FriendIdentity({ row, label, onOpenProfile }: { onOpenProfile: (id: string) => void; row: FriendshipView; label: (person: { username: string | null; display_name: string | null }) => string }) {
+  return <div className="friend-person">{row.avatar_url ? <img className="avatar avatar-photo" src={row.avatar_url} alt="" /> : <span className="avatar avatar-you">{(row.username?.[0] ?? 'U').toUpperCase()}</span>}<div><button type="button" className="profile-link" onClick={() => onOpenProfile(row.other_user_id)} title="Abrir perfil">{label(row)}</button>{row.display_name && <small>{row.display_name}</small>}</div></div>
 }
 
 function UserProfile({ client, userId, viewerId, onBack, onOpenGroup, onCharge }: {
@@ -1325,7 +1324,7 @@ function UserProfile({ client, userId, viewerId, onBack, onOpenGroup, onCharge }
     void (async () => {
       try {
         const profileData = await getProfile(client, userId)
-        if (!profileData) throw new Error('Este perfil não existe ou você não tem um grupo em comum com esta pessoa.')
+        if (!profileData) throw new Error('Este perfil não está disponível para sua conta.')
         const { data: memberships, error: membershipError } = await client.from('group_members')
           .select('group_id, joined_at, active').eq('user_id', userId).eq('active', true)
         if (membershipError) throw membershipError
@@ -1376,9 +1375,9 @@ function UserProfile({ client, userId, viewerId, onBack, onOpenGroup, onCharge }
     {loading ? <p className="auth-loading">Carregando perfil…</p> : error ? <p className="auth-error" role="alert">{error}</p> : profile && <>
       <div className="profile-heading"><div className="profile-photo-preview">{profile.avatar_url ? <img src={profile.avatar_url} alt={`Foto de ${displayName}`} /> : (profile.display_name || profile.username || 'P').slice(0, 1).toUpperCase()}</div><div><div className="eyebrow">PERFIL DO PARTICIPANTE</div><h1>{displayName}<span className="heading-dot">.</span></h1>{profile.username && <p>@{profile.username}</p>}</div></div>
       {userId !== viewerId && <ProfileFriendshipActions key={`${viewerId}:${userId}`} client={client} userId={userId} hasUsername={Boolean(profile.username)} onCharge={onCharge} />}
-      <div className="profile-details-grid"><article className="settlement-panel"><small>NOME</small><strong>{profile.display_name || 'Não informado'}</strong></article><article className="settlement-panel"><small>APELIDO</small><strong>{profile.username ? `@${profile.username}` : 'Não definido'}</strong></article><article className="settlement-panel"><small>CHAVE PIX</small><strong>{profile.pix_key || 'Não informada'}</strong></article></div>
+      <div className="profile-details-grid"><article className="settlement-panel"><small>NOME</small><strong>{profile.display_name || 'Não informado'}</strong></article><article className="settlement-panel"><small>APELIDO</small><strong>{profile.username ? `@${profile.username}` : 'Não definido'}</strong></article><article className="settlement-panel"><small>CHAVE PIX</small><strong>{profile.pix_key || 'Não disponível neste perfil'}</strong></article></div>
       <div className="section-title"><div><h2>Grupos em comum</h2><p>{sharedGroups.length} {sharedGroups.length === 1 ? 'grupo compartilhado' : 'grupos compartilhados'} com você</p></div></div>
-      {sharedGroups.length === 0 ? <div className="empty-expenses"><strong>Nenhum grupo ativo em comum.</strong><p>Os detalhes do perfil ficam disponíveis para pessoas que compartilham um grupo ativo.</p></div> : <div className="profile-groups">{sharedGroups.map((group) => <article className="settlement-panel profile-group" key={group.id}>
+      {sharedGroups.length === 0 ? <div className="empty-expenses"><strong>Nenhum grupo ativo em comum.</strong><p>Despesas entre amigos ficam disponíveis na tela Entre amigos.</p></div> : <div className="profile-groups">{sharedGroups.map((group) => <article className="settlement-panel profile-group" key={group.id}>
         <div className="profile-group-heading"><div><h3>{group.name}</h3><small>Período do grupo: {new Date(group.created_at).toLocaleDateString('pt-BR')} – {group.archived_at ? new Date(group.archived_at).toLocaleDateString('pt-BR') : 'em andamento'} · Em comum desde {new Date(group.sharedSince).toLocaleDateString('pt-BR')}</small></div><button className="button button-light" onClick={() => onOpenGroup(group.id)}>Abrir grupo</button></div>
         <div className="profile-balances"><p>Seu saldo no grupo <strong className={group.viewerBalance > 0 ? 'balance-positive' : group.viewerBalance < 0 ? 'balance-negative' : ''}>{formatBrlCents(group.viewerBalance)}</strong></p><p>Saldo de {profile.username ? `@${profile.username}` : 'esta pessoa'} <strong className={group.profileBalance > 0 ? 'balance-positive' : group.profileBalance < 0 ? 'balance-negative' : ''}>{formatBrlCents(group.profileBalance)}</strong></p></div>
         <details className="profile-history"><summary>Histórico compartilhado · {group.history.length} registros</summary>{group.history.length === 0 ? <p>Nenhuma despesa ou acerto compartilhado neste grupo.</p> : <div className="settlement-list">{group.history.map((item) => <div className="balance-row" key={`${item.kind}-${item.id}`}><span><strong>{item.description}</strong><small>{item.kind === 'expense' ? 'Despesa' : item.status === 'pending' ? 'Acerto pendente' : 'Acerto pago'} · {new Date(`${item.date}T12:00:00`).toLocaleDateString('pt-BR')}</small></span><strong>{formatBrlCents(item.amount)}</strong></div>)}</div>}</details>
@@ -1387,80 +1386,33 @@ function UserProfile({ client, userId, viewerId, onBack, onOpenGroup, onCharge }
   </section>
 }
 
-function NotificationCenter({ client, userId, onOpenGroup }: { client: NonNullable<typeof supabase>; userId: string; onOpenGroup: (id: string, recordId?: string) => void }) {
-  const [rows, setRows] = useState<Array<{ id: string; title: string; message: string; destination: string; created_at: string; read_at: string | null }>>([])
-  const [permission, setPermission] = useState(() => ('Notification' in window ? Notification.permission : 'unsupported'))
-  const [busy, setBusy] = useState(false)
-  const [notice, setNotice] = useState('')
-  const vapidKey = import.meta.env.VITE_VAPID_PUBLIC_KEY as string | undefined
-
-  async function refresh() {
-    const { data, error } = await client.from('notifications').select('id,title,message,destination,created_at,read_at').order('created_at', { ascending: false }).limit(100)
-    if (error) { setNotice('Não foi possível carregar seus avisos.'); return }
-    setRows(data ?? [])
-  }
-  useEffect(() => {
-    void refresh()
-    const channel = client.channel(`notification-center:${userId}`).on('postgres_changes', { event: '*', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` }, () => void refresh()).subscribe()
-    return () => { void client.removeChannel(channel) }
-  }, [client, userId])
-
-  async function enablePush() {
-    if (!('Notification' in window) || !('serviceWorker' in navigator) || !('PushManager' in window)) { setPermission('unsupported'); return }
-    if (!vapidKey) { setNotice('A chave pública VAPID ainda não está configurada neste ambiente.'); return }
-    setBusy(true); setNotice('')
-    try {
-      const granted = await Notification.requestPermission()
-      setPermission(granted)
-      if (granted !== 'granted') { setNotice(granted === 'denied' ? 'Permissão negada. Os avisos continuam disponíveis nesta central; altere a permissão nas configurações do navegador para ativar o Push.' : 'Permissão não concedida. Os avisos continuam disponíveis nesta central.'); return }
-      const registration = await navigator.serviceWorker.ready
-      const subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: decodeVapidKey(vapidKey) })
-      const json = subscription.toJSON()
-      const { error } = await client.from('web_push_subscriptions').upsert({ user_id: userId, endpoint: subscription.endpoint, p256dh: json.keys?.p256dh, auth: json.keys?.auth }, { onConflict: 'endpoint' })
-      if (error) throw error
-      setNotice('Este dispositivo está inscrito para receber avisos Push.')
-    } catch (error) { setNotice(error instanceof Error ? error.message : 'Não foi possível ativar o Push neste dispositivo.') }
-    finally { setBusy(false) }
-  }
-
-  async function disablePush() {
-    setBusy(true)
-    try {
-      const registration = await navigator.serviceWorker.ready
-      const subscription = await registration.pushManager.getSubscription()
-      if (subscription) {
-        await client.from('web_push_subscriptions').delete().eq('endpoint', subscription.endpoint).eq('user_id', userId)
-        await subscription.unsubscribe()
-      }
-      setNotice('A inscrição deste dispositivo foi desativada. Os avisos seguem na central.')
-    } finally { setBusy(false) }
-  }
-
+function NotificationCenter({ client, inbox, devicePush, onOpenGroup }: { client: NonNullable<typeof supabase>; inbox: ReturnType<typeof useNotifications>; devicePush: ReturnType<typeof useDevicePush>; onOpenGroup: (id: string, recordId?: string) => void }) {
+  const { rows } = inbox
   async function toggleRead(row: typeof rows[number]) {
     const readAt = row.read_at ? null : new Date().toISOString()
     const { error } = await client.from('notifications').update({ read_at: readAt }).eq('id', row.id)
-    if (!error) setRows((current) => current.map((item) => item.id === row.id ? { ...item, read_at: readAt } : item))
+    if (!error) window.dispatchEvent(new Event('splituai-inbox-refresh'))
   }
 
   return <section className="page-wrap">
     <div className="page-heading"><div><span className="eyebrow">CENTRAL</span><h1>Seus avisos</h1><p>Atualizações de grupos, convites e acertos ficam guardadas aqui.</p></div></div>
     <section className="appearance-card" aria-labelledby="push-heading"><h2 id="push-heading">Notificações neste dispositivo</h2>
-      {permission === 'unsupported' ? <p>Este navegador não oferece Web Push. Você ainda pode consultar os avisos nesta central.</p> : permission === 'denied' ? <p>A permissão foi negada. Os avisos continuam nesta central; reative a permissão nas configurações do navegador para voltar a receber Push.</p> : <p>O Push é opcional e só será ativado depois que você escolher permitir neste dispositivo. Em iPhone e iPad, adicione a web app à Tela de Início para receber Web Push.</p>}
-      <div className="form-actions"><button className="button button-dark" type="button" onClick={() => void enablePush()} disabled={busy || permission === 'unsupported' || permission === 'denied'}>Ativar neste dispositivo</button><button className="button button-light" type="button" onClick={() => void disablePush()} disabled={busy || permission === 'unsupported'}>Desativar inscrição</button></div>
-      {notice && <p role="status">{notice}</p>}
+      <p role="status">{devicePush.status}</p>
+      <p>{devicePush.delivery}</p>
+      <p>No iPhone/iPad, adicione à Tela de Início. A entrega depende do navegador, da internet e do sistema; não há prazo garantido.</p>
+      <div className="form-actions">
+        <button className="button button-dark" onClick={() => void devicePush.action('enable')} disabled={devicePush.busy}>Ativar neste dispositivo</button>
+        <button className="button button-light" onClick={() => void devicePush.action('disable')} disabled={devicePush.busy}>Desativar inscrição</button>
+        <button className="button button-light" onClick={() => void devicePush.action('test')} disabled={devicePush.busy || !devicePush.subscriptionId}>Enviar notificação de teste</button>
+      </div>
+      {devicePush.notice && <p role="status">{devicePush.notice}</p>}
     </section>
-    <div className="notification-list">{rows.length === 0 ? <div className="empty-state"><strong>Nenhum aviso por enquanto</strong><p>Quando houver uma atualização, ela aparecerá aqui.</p></div> : rows.map((row) => <article className={`notification-row${row.read_at ? '' : ' notification-unread'}`} key={row.id}>
+    <p role="status">{inbox.error || (!inbox.loaded ? 'Carregando avisos…' : '')}</p><div className="notification-list">{rows.length === 0 && !inbox.loaded ? null : rows.length === 0 ? <div className="empty-state"><strong>Nenhum aviso por enquanto</strong><p>Quando houver uma atualização, ela aparecerá aqui.</p></div> : rows.map((row) => <article className={`notification-row${row.read_at ? '' : ' notification-unread'}`} key={row.id}>
       <div><strong>{row.title}</strong><p>{row.message}</p><time dateTime={row.created_at}>{new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(row.created_at))}</time></div>
       <div className="notification-actions"><button className="button button-light" type="button" onClick={() => void toggleRead(row)}>{row.read_at ? 'Marcar não lido' : 'Marcar como lido'}</button><button className="button button-dark" type="button" onClick={() => { const target = new URL(row.destination, window.location.origin); const groupId = target.searchParams.get('group'); const tab = target.searchParams.get('tab'); if (groupId) onOpenGroup(groupId, target.searchParams.get('expense') ?? target.searchParams.get('settlement') ?? undefined); else if (tab === 'invitations' || tab === 'friends' || tab === 'charges') window.location.assign(row.destination); }}>Abrir</button></div>
     </article>)}</div>
     <p className="form-note">O texto do Push é genérico para reduzir a exposição na tela bloqueada. O ícone e a aparência dependem do navegador e do sistema operacional. A entrega em relógios depende do espelhamento e das configurações do telefone e do relógio.</p>
   </section>
-}
-
-function decodeVapidKey(value: string) {
-  const padding = '='.repeat((4 - value.length % 4) % 4)
-  const raw = atob((value + padding).replace(/-/g, '+').replace(/_/g, '/'))
-  return Uint8Array.from(raw, (char) => char.charCodeAt(0))
 }
 
 function formatBrlInput(value: string) {

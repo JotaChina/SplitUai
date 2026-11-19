@@ -29,3 +29,5 @@ alter table storage.objects enable row level security;
 grant select,insert,update,delete on storage.objects to authenticated;
 insert into auth.users values('00000000-0000-0000-0000-000000000001'),('00000000-0000-0000-0000-000000000002'),('00000000-0000-0000-0000-000000000003');
 insert into public.profiles select id,'user'||right(id::text,1),'Pessoa', 'pix-test' from auth.users;
+
+alter table public.profiles add column avatar_url text;

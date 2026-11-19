@@ -1,11 +1,14 @@
+import { categoryLabels } from '../lib/expenseCategories'
+import { calculateDirectSplit, createDetailedDirectCharge, personalDirectSpending, type DirectSplitMode } from '../lib/directCharges'
 import { useEffect, useRef, useState, type FormEvent } from 'react'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { listMyFriendships, type FriendshipView } from '../lib/friendships'
 import { formatBrlCents, parseBrlCents } from '../lib/expenses'
-import { availableChargeActions, chargeActionLabels, chargeError, chargeStatusLabels, createDirectCharge, directChargeAmount, listDirectCharges, manageDirectCharge, receiptUrl, uploadChargeReceipt, type ChargeAction, type ChargeEvent, type DirectCharge } from '../lib/directCharges'
+import { availableChargeActions, chargeActionLabels, chargeError, chargeStatusLabels, listDirectCharges, manageDirectCharge, receiptUrl, uploadChargeReceipt, type ChargeAction, type ChargeEvent, type DirectCharge } from '../lib/directCharges'
 import './directCharges.css'
 
-export function DirectCharges({ client, userId, initialFriendId, targetId }: {
+export function DirectCharges({ client, userId, initialFriendId, targetId, onOpenProfile }: {
+  onOpenProfile: (id: string) => void;
   client: SupabaseClient; userId: string; initialFriendId?: string; targetId?: string | null
 }) {
   const [rows, setRows] = useState<DirectCharge[]>([])
@@ -19,7 +22,16 @@ export function DirectCharges({ client, userId, initialFriendId, targetId }: {
   const [friendId, setFriendId] = useState(initialFriendId ?? '')
   const [description, setDescription] = useState('')
   const [amount, setAmount] = useState('')
-  const [split, setSplit] = useState(false)
+  const [mode, setMode] = useState<DirectSplitMode>('charge')
+  const [splitValue, setSplitValue] = useState('')
+  const [category, setCategory] = useState('outros')
+  const today = () => { const date = new Date(); return `${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}` }
+  const [expenseDate, setExpenseDate] = useState(today)
+  const [notes, setNotes] = useState('')
+  const [month, setMonth] = useState(() => today().slice(0,7))
+  const [reportFriend, setReportFriend] = useState('')
+  const split = mode !== 'charge'
+  const shareValue = () => mode === 'custom' || mode === 'percentage' ? parseBrlCents(splitValue) : 0
   const [dueDate, setDueDate] = useState('')
   const [filter, setFilter] = useState<'pay' | 'receive' | 'history'>(targetId ? 'history' : 'pay')
   const requestId = useRef(crypto.randomUUID())
@@ -63,9 +75,9 @@ export function DirectCharges({ client, userId, initialFriendId, targetId }: {
     if (inFlight.current) return
     inFlight.current = true; setBusy(true); setError(''); setNotice('')
     try {
-      await createDirectCharge(client, { id: requestId.current, friendId, description, cents: parseBrlCents(amount), split, dueDate })
+      await createDetailedDirectCharge(client, { id: requestId.current, friendId, description, total: parseBrlCents(amount), mode, value: shareValue(), dueDate, category, expenseDate, notes })
       setNotice('Cobrança enviada. A outra pessoa poderá reconhecer ou contestar o valor.')
-      setDescription(''); setAmount(''); setDueDate(''); setShowForm(false); setFilter('receive'); requestId.current = crypto.randomUUID()
+      setDescription(''); setAmount(''); setDueDate(''); setNotes(''); setSplitValue(''); setCategory('outros'); setExpenseDate(today()); setShowForm(false); setFilter('receive'); requestId.current = crypto.randomUUID()
       await refresh()
     } catch (reason) { setError(chargeError(reason)) }
     finally { inFlight.current = false; setBusy(false) }
@@ -75,7 +87,11 @@ export function DirectCharges({ client, userId, initialFriendId, targetId }: {
   const total = (creditor: boolean) => confirmed.filter(r => (r.creditor_id === userId) === creditor).reduce((sum, r) => sum + r.amount_cents, 0)
   const displayed = filter === 'history' ? rows : open.filter(r => filter === 'receive' ? r.creditor_id === userId : r.debtor_id === userId)
   let preview = 0
-  try { preview = directChargeAmount(parseBrlCents(amount), split) } catch { /* Form validates on submit. */ }
+  try { preview = calculateDirectSplit(parseBrlCents(amount), mode, shareValue()).debtor } catch { /* Form validates on submit. */ }
+  const spending = personalDirectSpending(rows, userId, month, reportFriend)
+  const categoryTotals = Object.entries(categoryLabels).map(([key, label]) => ({ key, label, cents: spending.filter(r => r.category === key).reduce((sum, r) => sum + r.cents, 0) })).filter(r => r.cents > 0)
+  const spendingTotal = spending.reduce((sum, r) => sum + r.cents, 0)
+  const reportFriends = new Map(rows.map(r => [r.creditor_id === userId ? r.debtor_id : r.creditor_id, r.other_name]))
   return <section className="page-wrap direct-charges" aria-busy={loading}>
     <div className="page-heading"><div><div className="eyebrow">SEM GRUPO</div><h1>Entre amigos<span className="heading-dot">.</span></h1><p>Cobranças diretas entre amizades aceitas.</p></div><button type="button" className="button button-dark" onClick={() => setShowForm(v => !v)}>{showForm ? 'Fechar formulário' : 'Criar cobrança'}</button></div>
     <p className="form-note">Reconheça o valor antes de informar o pagamento. A quitação depende da confirmação de quem recebe. O pagamento é feito pelo seu banco.</p>
@@ -85,20 +101,30 @@ export function DirectCharges({ client, userId, initialFriendId, targetId }: {
     {showForm && <form className="charge-form settlement-panel" onSubmit={e => void create(e)}><h2>Nova cobrança</h2>
       <label>Amizade<select required disabled={busy || loading} value={friendId} onChange={e => changeForm(() => setFriendId(e.target.value))}><option value="">Selecione uma amizade aceita</option>{friends.map(f => <option key={f.other_user_id} value={f.other_user_id}>{f.username ? `@${f.username}` : f.display_name || 'Amizade'}</option>)}</select></label>
       {!loading && !friends.length && <p>Você precisa de uma amizade aceita para criar uma cobrança.</p>}
-      <label>Tipo<select disabled={busy} value={split ? 'split' : 'charge'} onChange={e => changeForm(() => setSplit(e.target.value === 'split'))}><option value="charge">Cobrar um valor</option><option value="split">Dividir uma despesa igualmente</option></select></label>
+      <label>Rateio<select disabled={busy} value={mode} onChange={e => changeForm(() => setMode(e.target.value as DirectSplitMode))}><option value="charge">Cobrança avulsa (sem despesa)</option><option value="equal">Despesa dividida igualmente</option><option value="percentage">Despesa por percentual</option><option value="custom">Despesa por valor personalizado</option></select></label>
+      {split && <p className="form-note">Você pagou o total. A sua parte é o restante após descontar a parte da amizade.</p>}
+      <div className="form-two"><label>Categoria<select disabled={busy} value={category} onChange={e => changeForm(() => setCategory(e.target.value))}>{Object.entries(categoryLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></label><label>Data da despesa<input required type="date" disabled={busy} value={expenseDate} onChange={e => changeForm(() => setExpenseDate(e.target.value))} /></label></div>
+      {(mode === 'percentage' || mode === 'custom') && <label>{mode === 'percentage' ? 'Percentual da amizade (%)' : 'Parte da amizade (R$)'}<input required inputMode="decimal" disabled={busy} value={splitValue} onChange={e => changeForm(() => setSplitValue(e.target.value))} placeholder={mode === 'percentage' ? 'Ex.: 30,00' : 'Ex.: 25,00'} /></label>}
       <label>Descrição<input required maxLength={200} disabled={busy} value={description} onChange={e => changeForm(() => setDescription(e.target.value))} placeholder="Ex.: lanche de ontem" /></label>
       <div className="form-two"><label>{split ? 'Total pago por você (R$)' : 'Valor a cobrar (R$)'}<input required inputMode="decimal" disabled={busy} value={amount} onChange={e => changeForm(() => setAmount(e.target.value))} placeholder="0,00" /></label><label>Vencimento (opcional)<input type="date" disabled={busy} value={dueDate} onChange={e => changeForm(() => setDueDate(e.target.value))} /></label></div>
-      {preview > 0 && <p>A outra pessoa recebe uma cobrança de <strong>{formatBrlCents(preview)}</strong>.{split && ' Se sobrar um centavo, ele fica na sua parte.'}</p>}
+      {preview > 0 && <p>A outra pessoa recebe uma cobrança de <strong>{formatBrlCents(preview)}</strong>.{split && <> Sua parte: <strong>{formatBrlCents(parseBrlCents(amount) - preview)}</strong>.</>}{mode === 'equal' && ' Se sobrar um centavo, ele fica na sua parte.'}</p>}
+      <label>Observações (opcional)<textarea maxLength={2000} disabled={busy} value={notes} onChange={e => changeForm(() => setNotes(e.target.value))} /></label>
       <button className="button button-dark" disabled={busy || loading || Boolean(loadError) || !friends.some(f => f.other_user_id === friendId)}>{busy ? 'Enviando…' : 'Enviar cobrança'}</button>
     </form>}
+    <section className="settlement-panel charge-report" aria-label="Seus gastos entre amigos"><h2>Seus gastos entre amigos</h2>
+      <div className="form-two charge-form"><label>Mês<input type="month" required value={month} onChange={e => setMonth(e.target.value)} /></label><label>Amizade<select value={reportFriend} onChange={e => setReportFriend(e.target.value)}><option value="">Todas</option>{[...reportFriends].map(([id, name]) => <option key={id} value={id}>{name}</option>)}</select></label></div>
+      <p>Sua parte nas despesas reconhecidas, incluindo as quitadas, pela data da despesa. Cobranças avulsas, pendentes, contestadas e canceladas ficam fora. Gastos de grupos não estão incluídos neste gráfico.</p>
+      {loading ? <p role="status">Carregando gastos…</p> : loadError ? <p>Resumo indisponível. Atualize as cobranças.</p> : <><strong>Total pessoal: {formatBrlCents(spendingTotal)}</strong>{categoryTotals.length ? <ul className="charge-category-chart">{categoryTotals.map(r => <li key={r.key}><div><span>{r.label}</span><strong>{formatBrlCents(r.cents)}</strong></div><meter min={0} max={spendingTotal} value={r.cents} aria-label={`${r.label}: ${formatBrlCents(r.cents)}`} /></li>)}</ul> : <p>Nenhuma despesa reconhecida neste período.</p>}</>}
+    </section>
     <div className="charge-tabs" role="group" aria-label="Filtrar cobranças">{([['pay', 'A pagar'], ['receive', 'A receber'], ['history', 'Histórico']] as const).map(([value, label]) => <button type="button" className={`button ${filter === value ? 'button-dark' : 'button-light'}`} aria-pressed={filter === value} key={value} onClick={() => setFilter(value)}>{label}</button>)}<button type="button" className="text-button" onClick={() => void refresh()}>Atualizar</button></div>
-    {loading ? <p role="status">Carregando cobranças…</p> : displayed.length ? <div className="charge-list">{displayed.map(row => <ChargeCard key={row.id} client={client} row={row} userId={userId} highlighted={targetId === row.id} onSaved={refresh} />)}</div> : <div className="empty-expenses"><strong>Nenhuma cobrança nesta lista.</strong></div>}
+    {loading ? <p role="status">Carregando cobranças…</p> : displayed.length ? <div className="charge-list">{displayed.map(row => <ChargeCard onOpenProfile={onOpenProfile} key={row.id} client={client} row={row} userId={userId} highlighted={targetId === row.id} onSaved={refresh} />)}</div> : <div className="empty-expenses"><strong>Nenhuma cobrança nesta lista.</strong></div>}
     {targetId && !loading && !loadError && !rows.some(r => r.id === targetId) && <p role="status">Esta cobrança não está disponível para sua conta.</p>}
   </section>
 }
 
 const buttonLabels: Record<ChargeAction, string> = { accept: 'Reconhecer valor', dispute: 'Contestar', reopen: 'Solicitar reconhecimento novamente', report_payment: 'Informar pagamento', confirm_payment: 'Confirmar recebimento', reject_payment: 'Pagamento não localizado', cancel: 'Cancelar cobrança', attach_expense: 'Anexar comprovante da despesa' }
-function ChargeCard({ client, row, userId, highlighted, onSaved }: {
+function ChargeCard({ client, row, userId, highlighted, onSaved, onOpenProfile }: {
+  onOpenProfile: (id: string) => void;
   client: SupabaseClient; row: DirectCharge; userId: string; highlighted: boolean; onSaved: () => Promise<void>
 }) {
   const [action, setAction] = useState<ChargeAction | null>(null)
@@ -145,9 +171,13 @@ function ChargeCard({ client, row, userId, highlighted, onSaved }: {
   const due = row.due_date ? new Date(`${row.due_date}T23:59:59`) : null
   const overdue = due && due < new Date() && row.status !== 'paid' && row.status !== 'cancelled'
   return <article id={`charge-${row.id}`} className={`settlement-panel charge-card${highlighted ? ' charge-highlight' : ''}`}>
-    <div className="charge-heading"><div><h2>{row.description}</h2><p>{outgoing ? 'A receber de' : 'A pagar para'} <strong>{row.other_name}</strong></p></div><strong className="charge-value">{formatBrlCents(row.amount_cents)}</strong></div>
+    <div className="charge-heading"><div><h2>{row.description}</h2><p>{outgoing ? 'A receber de' : 'A pagar para'} <button type="button" className="profile-link" onClick={() => onOpenProfile(outgoing ? row.debtor_id : row.creditor_id)}>{row.other_name}</button></p></div><strong className="charge-value">{formatBrlCents(row.amount_cents)}</strong></div>
     <p><span className="role-badge">{chargeStatusLabels[row.status]}</span> {due && <span>{overdue ? 'Vencida em' : 'Vencimento:'} {due.toLocaleDateString('pt-BR')}</span>}</p>
-    {row.total_cents !== null && <p>Despesa de {formatBrlCents(row.total_cents)} dividida entre duas pessoas.</p>}
+    <details><summary>Detalhes e rateio</summary>
+      <p>{categoryLabels[row.category as keyof typeof categoryLabels] ?? 'Outros'} · {row.expense_date ? new Date(`${row.expense_date}T12:00:00`).toLocaleDateString('pt-BR') : 'Data não informada'}</p>
+      {row.total_cents !== null ? <><p>Total pago por {outgoing ? 'você' : row.other_name}: <strong>{formatBrlCents(row.total_cents)}</strong></p><p>Rateio: {row.split_mode === 'percentage' ? `percentual (${(row.debtor_percentage ?? 0) / 100}% para quem deve)` : row.split_mode === 'custom' ? 'valores personalizados' : 'igual'}.</p><p>Sua parte: <strong>{formatBrlCents(outgoing ? row.total_cents - row.amount_cents : row.amount_cents)}</strong> · Parte de {row.other_name}: <strong>{formatBrlCents(outgoing ? row.amount_cents : row.total_cents - row.amount_cents)}</strong></p></> : <p>Cobrança avulsa, fora dos gráficos de despesas.</p>}
+      {row.notes && <p className="charge-notes">{row.notes}</p>}
+    </details>
     {!outgoing && row.creditor_pix_key && row.status !== 'paid' && row.status !== 'cancelled' && <div className="charge-pix"><span>Pix de {row.other_name}: <strong>{row.creditor_pix_key}</strong></span><button className="text-button" type="button" onClick={() => void copyPix()}>Copiar chave Pix</button></div>}
     <div className="charge-actions">{row.expense_attachment && <button type="button" className="text-button" onClick={() => void openReceipt(row.expense_attachment!)}>Ver comprovante da despesa</button>}{row.payment_attachment && <button type="button" className="text-button" onClick={() => void openReceipt(row.payment_attachment!)}>Ver comprovante do pagamento</button>}</div>
     {error && <p className="auth-error" role="alert">{error}</p>}{notice && <p className="auth-message" role="status">{notice}</p>}

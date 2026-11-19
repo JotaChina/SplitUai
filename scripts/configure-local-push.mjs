@@ -42,9 +42,10 @@ const nextViteEnv = /^VITE_VAPID_PUBLIC_KEY=.*$/m.test(currentViteEnv)
   : `${currentViteEnv.trimEnd()}\n${publicKeyLine}\n`
 writeFileSync(viteEnvPath, nextViteEnv)
 
-const sql = `insert into private.push_delivery_settings(singleton, webhook_secret)
-values (true, ${sqlLiteral(webhookSecret)})
-on conflict (singleton) do update set webhook_secret = excluded.webhook_secret;\n`
+const sql = `insert into private.push_delivery_settings(singleton, webhook_secret, function_url)
+values (true, ${sqlLiteral(webhookSecret)}, 'http://kong:8000/functions/v1/send-web-push')
+on conflict (singleton) do update set webhook_secret = excluded.webhook_secret,
+function_url = excluded.function_url;\n`
 execFileSync('docker', [
   'exec', '-i', 'supabase_db_splituai', 'psql', '-v', 'ON_ERROR_STOP=1',
   '-U', 'postgres', '-d', 'postgres', '-f', '-',

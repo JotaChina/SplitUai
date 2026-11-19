@@ -1,0 +1,59 @@
+name: Validate and deploy reliable production Push
+on:
+  push:
+    branches: [codex/production-improvements]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: production-push
+  cancel-in-progress: false
+jobs:
+  validate-and-deploy:
+    runs-on: ubuntu-latest
+    environment: SplitUai
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_PASSWORD: local-test-only
+          POSTGRES_DB: charges_ci
+        ports: ['5432:5432']
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: node --test scripts/direct-charges.test.mjs scripts/deploy-direct-charges.test.mjs scripts/notifications.test.mjs
+      - run: npm run validate:category-suggestions
+      - run: npm run build
+      - name: Verify PostgreSQL lifecycle and ownership in disposable database
+        env:
+          PGPASSWORD: local-test-only
+        shell: bash
+        run: |
+          psql -h localhost -U postgres -d charges_ci -v ON_ERROR_STOP=1 -f scripts/direct-charges-fixture.sql
+          psql -h localhost -U postgres -d charges_ci -v ON_ERROR_STOP=1 -f supabase/migrations/20261118000200_direct_charges.sql
+          psql -h localhost -U postgres -d charges_ci -v ON_ERROR_STOP=1 -f supabase/migrations/20261118000300_detailed_direct_charges.sql
+          psql -h localhost -U postgres -d charges_ci -v ON_ERROR_STOP=1 -f scripts/direct-charges-security.sql
+          psql -h localhost -U postgres -d charges_ci -v ON_ERROR_STOP=1 -f scripts/direct-charges-detailed.sql
+          psql -h localhost -U postgres -d charges_ci -v ON_ERROR_STOP=1 -f scripts/push-ci-fixture.sql
+          sed '/^create extension if not exists pg_cron;$/d' supabase/migrations/20261118000100_reliable_push.sql > "$RUNNER_TEMP/push-ci.sql"
+          psql -h localhost -U postgres -d charges_ci -v ON_ERROR_STOP=1 -f "$RUNNER_TEMP/push-ci.sql"
+          psql -h localhost -U postgres -d charges_ci -v ON_ERROR_STOP=1 -f scripts/test-push-queue.sql
+      - name: Deploy and verify production backend before frontend
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_VAPID_PUBLIC_KEY: ${{ vars.VITE_VAPID_PUBLIC_KEY }}
+        run: node scripts/deploy-reliable-push.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: production-push-before
+          path: ${{ runner.temp }}/push-release/
+          retention-days: 14
+          if-no-files-found: ignore

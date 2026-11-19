@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="public/brand/splituai-graffiti.png" alt="SplitUai" width="100" />
+  <img src="public/brand/splituai-graffiti.png" alt="SplitUai" width="380" />
 
 # SplitUai
 

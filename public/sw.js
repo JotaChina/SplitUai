@@ -1,5 +1,12 @@
 /* SplitUai Web Push service worker. Published under /SplitUai/. */
 const notificationLogo = '/SplitUai/brand/splituai-graffiti.png'
+function safeDestination(value) {
+  try {
+    const url = new URL(value || '/SplitUai/', self.location.origin)
+    if (url.origin === self.location.origin && url.pathname.startsWith('/SplitUai/')) return url.href
+  } catch { /* Use app root for invalid destinations. */ }
+  return new URL('/SplitUai/', self.location.origin).href
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil(self.skipWaiting())
@@ -47,15 +54,15 @@ self.addEventListener('push', (event) => {
     icon: notificationLogo,
     image: notificationLogo,
     badge: '/SplitUai/notification-badge.png',
-    data: { url: payload.url || '/SplitUai/' },
+    data: { url: safeDestination(payload.url) },
     tag: payload.tag || undefined,
   }))
 })
 self.addEventListener('notificationclick', (event) => {
   event.notification.close()
-  const destination = new URL(event.notification.data?.url || '/SplitUai/', self.location.origin).href
+  const destination = safeDestination(event.notification.data?.url)
   event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clients) => {
-    const existing = clients.find((client) => new URL(client.url).origin === self.location.origin)
+    const existing = clients.find((client) => new URL(client.url).origin === self.location.origin && new URL(client.url).pathname.startsWith('/SplitUai/'))
     if (existing) return existing.navigate(destination).then(() => existing.focus())
     return self.clients.openWindow(destination)
   }))

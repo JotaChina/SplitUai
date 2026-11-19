@@ -248,7 +248,10 @@ export async function getProfile(client: SupabaseClient, userId: string) {
     .eq('id', userId)
     .maybeSingle()
   if (error) throw error
-  return data as GroupProfileRecord | null
+  if (data) return data as GroupProfileRecord
+  const { data: social, error: socialError } = await client.rpc('get_friend_profile', { p_user_id: userId })
+  if (socialError) throw socialError
+  return (social?.[0] ?? null) as GroupProfileRecord | null
 }
 
 export async function setMyPixKey(client: SupabaseClient, userId: string, pixKey: string) {

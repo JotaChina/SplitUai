@@ -4,6 +4,7 @@ export type ChargeStatus = 'pending' | 'accepted' | 'disputed' | 'payment_report
 export type ChargeAction = 'accept' | 'dispute' | 'reopen' | 'report_payment' | 'confirm_payment' | 'reject_payment' | 'cancel' | 'attach_expense'
 export type DirectCharge = {
   id: string; creditor_id: string; debtor_id: string; description: string; amount_cents: number
+  category: string; expense_date: string; notes: string | null; split_mode: DirectSplitMode; debtor_percentage: number | null
   total_cents: number | null; due_date: string | null; status: ChargeStatus
   expense_attachment: string | null; payment_attachment: string | null
   created_at: string; updated_at: string; other_name: string; creditor_pix_key: string | null
@@ -83,4 +84,31 @@ export async function receiptUrl(client: SupabaseClient, path: string) {
   const { data, error } = await client.storage.from('direct-charge-receipts').createSignedUrl(path, 60)
   if (error) throw error
   return data.signedUrl
+}
+
+export type DirectSplitMode = 'charge' | 'equal' | 'percentage' | 'custom'
+export function calculateDirectSplit(total: number, mode: DirectSplitMode, value = 0) {
+  if (!Number.isSafeInteger(total) || total < 1 || total > 200000000) throw new Error('Informe um total válido, até R$ 2 milhões.')
+  const debtor = mode === 'charge' ? total : mode === 'equal' ? Math.floor(total / 2) : mode === 'percentage' ? Math.round(total * value / 10000) : value
+  if (mode === 'percentage' && (!Number.isSafeInteger(value) || value < 1 || value > 10000)) throw new Error('Informe um percentual entre 0,01 e 100%.')
+  if (!Number.isSafeInteger(debtor) || debtor < 1 || debtor > 100000000 || debtor > total || total - debtor > 100000000) throw new Error('O rateio deve respeitar o total e o limite de R$ 1 milhão por pessoa.')
+  return { debtor, creditor: total - debtor }
+}
+export function personalDirectSpending(rows: DirectCharge[], userId: string, month: string, friendId = '') {
+  return rows.filter(r => ['accepted', 'payment_reported', 'paid'].includes(r.status) && r.total_cents !== null && r.expense_date?.startsWith(month)
+    && (!friendId || (r.creditor_id === userId ? r.debtor_id : r.creditor_id) === friendId))
+    .map(r => ({ category: r.category, cents: r.creditor_id === userId ? r.total_cents! - r.amount_cents : r.amount_cents }))
+}
+export async function createDetailedDirectCharge(client: SupabaseClient, input: {
+  id: string; friendId: string; description: string; total: number; mode: DirectSplitMode; value: number;
+  category: string; expenseDate: string; notes: string; dueDate: string
+}) {
+  const shares = calculateDirectSplit(input.total, input.mode, input.value)
+  const { error } = await client.rpc('create_detailed_direct_charge', {
+    p_id: input.id, p_friend_id: input.friendId, p_description: input.description.trim(), p_amount_cents: shares.debtor,
+    p_total_cents: input.mode === 'charge' ? null : input.total, p_due_date: input.dueDate || null,
+    p_category: input.category, p_expense_date: input.expenseDate, p_notes: input.notes.trim() || null,
+    p_split_mode: input.mode, p_debtor_percentage: input.mode === 'percentage' ? input.value : null,
+  })
+  if (error) throw error
 }

@@ -7,7 +7,9 @@ on:
       - 'src/components/DirectCharges.tsx'
       - 'src/lib/directCharges.ts'
       - 'scripts/direct-charges*'
-      - 'supabase/migrations/20261118000200_direct_charges.sql'
+      - 'supabase/migrations/*direct_charges.sql'
+      - 'src/App.tsx'
+      - 'src/lib/groups.ts'
 permissions:
   contents: read
 jobs:
@@ -40,7 +42,9 @@ jobs:
         run: |
           psql -h localhost -U postgres -d charges_ci -v ON_ERROR_STOP=1 -f scripts/direct-charges-fixture.sql
           psql -h localhost -U postgres -d charges_ci -v ON_ERROR_STOP=1 -f supabase/migrations/20261118000200_direct_charges.sql
+          psql -h localhost -U postgres -d charges_ci -v ON_ERROR_STOP=1 -f supabase/migrations/20261118000300_detailed_direct_charges.sql
           psql -h localhost -U postgres -d charges_ci -v ON_ERROR_STOP=1 -f scripts/direct-charges-security.sql
+          psql -h localhost -U postgres -d charges_ci -v ON_ERROR_STOP=1 -f scripts/direct-charges-detailed.sql
           createdb -h localhost -U postgres charges_deploy_ci
           psql -h localhost -U postgres -d charges_deploy_ci -v ON_ERROR_STOP=1 -f scripts/direct-charges-fixture.sql
           psql -h localhost -U postgres -d charges_deploy_ci -v ON_ERROR_STOP=1 -c 'create schema supabase_migrations; create table supabase_migrations.schema_migrations(version text primary key,name text,statements text[]);'
